@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/uefi_ui", "crates/uefi_ui_prototype", "crates/uefi_ui_demo"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# Fast UEFI firmware builds: smaller/faster code, no unwinding in release.
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "thin"

@@ -1,0 +1,28 @@
+[package]
+name = "uefi_ui_demo"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Minimal UEFI app: Win95-style desktop + dialog using uefi_ui theme colors (GOP fill)."
+publish = false
+autobins = false
+
+[lib]
+name = "uefi_ui_demo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "uefi_ui_demo"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
+uefi = { version = "0.37", features = ["alloc", "panic_handler", "global_allocator"] }
+uefi-raw = { version = "0.14", default-features = false }
+uefi_ui = { path = "../uefi_ui" }
+
+# On the UEFI target, enable `uefi_ui/uefi` (FAT listing, etc.). Host / `uefi_ui_prototype` stay `std` + no `uefi` crate.
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi_ui = { path = "../uefi_ui", features = ["uefi"] }

@@ -1,0 +1,28 @@
+[package]
+name = "uefi_ui_prototype"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Linux desktop preview for uefi_ui: iterate on layout/theme/widgets (PNG output, no SDL2 required)."
+publish = false
+
+[features]
+default = []
+# Live SDL2 window (`make sim`). Requires system package `libsdl2-dev`.
+sdl = ["embedded-graphics-simulator/with-sdl"]
+
+[[bin]]
+name = "showcase"
+path = "src/bin/showcase.rs"
+
+[[bin]]
+name = "editor"
+path = "src/bin/editor.rs"
+required-features = ["sdl"]
+
+[dependencies]
+embedded-graphics = "0.8"
+embedded-graphics-simulator = { version = "0.8", default-features = false }
+uefi_ui = { path = "../uefi_ui" }
+uefi_ui_demo = { path = "../uefi_ui_demo" }
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
