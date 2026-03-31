@@ -3,6 +3,8 @@
 A `no_std + alloc` immediate-mode UI library targeting UEFI firmware, with a pixel-perfect
 Bedrock-style visual system (3D bevels, teal desktop, navy title bars).
 
+> 🚸 If you like this thing i made, please visit my 🦩 [website](https://supernihil.buro.earth) and consider [donating](https://buymeacoffee.com/sloev)  some 💰 to power me with ☕, thanx :-)
+
 ---
 
 ## What it is
