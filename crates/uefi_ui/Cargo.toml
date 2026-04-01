@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Immediate-mode UI primitives for UEFI: framebuffer (embedded-graphics), menus, input, fonts, PNG."
-readme = "../../SPEC.md"
+readme = "../../docs/README.md"
 
 [features]
 default = []

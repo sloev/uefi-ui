@@ -74,8 +74,6 @@ make iso          # bootable ISO at target/uefi_ui_demo.iso
 |----------|---------|
 | [Design Manual](designmanual.md) | Visual language, color palette, spacing rules, full widget gallery with screenshots |
 | [Theming Guide](THEMING.md) | How to use `Theme`, `BedrockBevel`, and `bedrock_controls` to build or customize the look |
-| [`../tasks.md`](../tasks.md) | Design and implementation task log |
-| [`../SPEC.md`](../SPEC.md) | Technical specification and feature contracts |
 
 ---
 
