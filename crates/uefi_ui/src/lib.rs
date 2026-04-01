@@ -48,6 +48,7 @@ pub mod pointer;
 pub mod popover;
 pub mod scene;
 pub mod settings;
+pub mod editor_settings;
 pub mod tree_view;
 pub mod theme;
 pub mod bedrock;
@@ -59,7 +60,7 @@ pub mod widgets;
 #[cfg(feature = "uefi")]
 pub mod uefi_fs;
 #[cfg(feature = "uefi")]
-pub use uefi_fs::{list_simple_fs_handles, open_directory_at_path, SimpleFsIo};
+pub use uefi_fs::{find_user_fs_handles, list_simple_fs_handles, open_directory_at_path, SimpleFsIo};
 #[cfg(feature = "uefi")]
 pub mod uefi_vars;
 

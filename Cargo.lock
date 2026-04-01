@@ -388,6 +388,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
+name = "skriver"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "uefi",
+ "uefi-raw",
+ "uefi_ui",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,16 +477,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uefi_ui_demo"
-version = "0.1.0"
-dependencies = [
- "fontdue",
- "uefi",
- "uefi-raw",
- "uefi_ui",
-]
-
-[[package]]
 name = "uefi_ui_prototype"
 version = "0.1.0"
 dependencies = [
@@ -484,7 +484,17 @@ dependencies = [
  "embedded-graphics-simulator",
  "fontdue",
  "uefi_ui",
- "uefi_ui_demo",
+ "uefi_ui_test",
+]
+
+[[package]]
+name = "uefi_ui_test"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "uefi",
+ "uefi-raw",
+ "uefi_ui",
 ]
 
 [[package]]

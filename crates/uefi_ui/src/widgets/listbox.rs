@@ -67,3 +67,52 @@ impl<'a> ListBox<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ITEMS: &[&str] = &["alpha", "beta", "gamma", "delta"];
+
+    #[test]
+    fn down_moves_selection() {
+        let mut lb = ListBox::new(ITEMS);
+        lb.apply_key(Key::Down, 4);
+        assert_eq!(lb.selected, 1);
+    }
+
+    #[test]
+    fn up_clamps_at_zero() {
+        let mut lb = ListBox::new(ITEMS);
+        lb.apply_key(Key::Up, 4);
+        assert_eq!(lb.selected, 0);
+    }
+
+    #[test]
+    fn home_and_end() {
+        let mut lb = ListBox::new(ITEMS);
+        lb.apply_key(Key::End, 4);
+        assert_eq!(lb.selected, 3);
+        lb.apply_key(Key::Home, 4);
+        assert_eq!(lb.selected, 0);
+    }
+
+    #[test]
+    fn scroll_follows_selection() {
+        let mut lb = ListBox::new(ITEMS);
+        // visible_rows = 2; pressing Down 3 times should scroll
+        lb.apply_key(Key::Down, 2);
+        lb.apply_key(Key::Down, 2);
+        lb.apply_key(Key::Down, 2);
+        assert_eq!(lb.selected, 3);
+        assert!(lb.scroll_top >= 2, "scroll_top should follow selection off screen");
+    }
+
+    #[test]
+    fn empty_list_no_panic() {
+        let mut lb = ListBox::new(&[]);
+        lb.apply_key(Key::Down, 4);
+        lb.apply_key(Key::Up, 4);
+        assert_eq!(lb.selected, 0);
+    }
+}

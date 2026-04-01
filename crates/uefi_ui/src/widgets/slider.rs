@@ -36,3 +36,33 @@ impl Slider {
         (self.value - self.min) / d
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ratio_midpoint() {
+        let s = Slider::new(0.0, 100.0, 50.0);
+        assert!((s.ratio() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_from_ratio_roundtrip() {
+        let mut s = Slider::new(0.0, 200.0, 0.0);
+        s.set_from_ratio(0.75);
+        assert!((s.value - 150.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn value_clamped_on_new() {
+        let s = Slider::new(10.0, 20.0, 99.0);
+        assert_eq!(s.value, 20.0);
+    }
+
+    #[test]
+    fn zero_range_ratio_is_zero() {
+        let s = Slider::new(5.0, 5.0, 5.0);
+        assert_eq!(s.ratio(), 0.0);
+    }
+}

@@ -22,6 +22,26 @@ pub fn list_simple_fs_handles() -> Vec<uefi::Handle> {
     find_handles::<SimpleFileSystem>().unwrap_or_default()
 }
 
+/// Returns handles for "user" volumes — FAT volumes whose root contains at least one entry
+/// that is not named `EFI` (case-insensitive). Skips boot-only EFI system partitions.
+///
+/// Useful for a text editor that should only show drives with user data, not the boot ESP.
+pub fn find_user_fs_handles() -> Vec<uefi::Handle> {
+    use uefi::boot::open_protocol_exclusive;
+    let mut result = Vec::new();
+    for h in list_simple_fs_handles() {
+        if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(h) {
+            let is_user = list_root_directory(&mut *fs)
+                .map(|entries| entries.iter().any(|e| !e.name.eq_ignore_ascii_case("EFI")))
+                .unwrap_or(false);
+            if is_user {
+                result.push(h);
+            }
+        }
+    }
+    result
+}
+
 /// Open `path` (slash-separated components, empty = volume root) as a directory handle.
 pub fn open_directory_at_path(fs: &mut SimpleFileSystem, path: &[String]) -> Result<Directory> {
     let mut dir = fs.open_volume()?;

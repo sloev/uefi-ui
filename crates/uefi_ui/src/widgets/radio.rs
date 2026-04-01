@@ -29,3 +29,40 @@ impl RadioGroup {
         self.selected = self.selected.checked_sub(1).unwrap_or(self.count - 1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_clamps_to_count() {
+        let mut g = RadioGroup::new(3, 0);
+        g.select(5); // out of range, ignored
+        assert_eq!(g.selected, 0);
+        g.select(2);
+        assert_eq!(g.selected, 2);
+    }
+
+    #[test]
+    fn next_wraps() {
+        let mut g = RadioGroup::new(3, 2);
+        g.next();
+        assert_eq!(g.selected, 0);
+    }
+
+    #[test]
+    fn prev_wraps() {
+        let mut g = RadioGroup::new(3, 0);
+        g.prev();
+        assert_eq!(g.selected, 2);
+    }
+
+    #[test]
+    fn single_option_stays_put() {
+        let mut g = RadioGroup::new(1, 0);
+        g.next();
+        assert_eq!(g.selected, 0);
+        g.prev();
+        assert_eq!(g.selected, 0);
+    }
+}

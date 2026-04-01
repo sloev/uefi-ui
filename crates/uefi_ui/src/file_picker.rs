@@ -38,6 +38,8 @@ pub trait FileIo {
 #[derive(Debug, Clone)]
 pub struct FilePickerState {
     pub path: Vec<String>,
+    /// Navigation cannot go above this path. Empty = no restriction (volume root is the limit).
+    pub root: Vec<String>,
     pub entries: Vec<DirEntry>,
     pub selected: usize,
     /// First visible row when the listing is taller than the on-screen rows.
@@ -51,6 +53,7 @@ impl FilePickerState {
     pub fn new(mode: PickerMode) -> Self {
         Self {
             path: Vec::new(),
+            root: Vec::new(),
             entries: Vec::new(),
             selected: 0,
             scroll_top: 0,
@@ -59,11 +62,29 @@ impl FilePickerState {
         }
     }
 
-    /// Refresh `entries` from `io`, prepend `..` when not at volume root, sort dirs then files.
+    pub fn new_rooted(mode: PickerMode, root: Vec<String>) -> Self {
+        let path = root.clone();
+        Self {
+            path,
+            root,
+            entries: Vec::new(),
+            selected: 0,
+            scroll_top: 0,
+            mode,
+            save_as: String::new(),
+        }
+    }
+
+    /// Returns true when `path` is at the root level (cannot navigate further up).
+    pub fn at_root(&self) -> bool {
+        self.path.len() <= self.root.len()
+    }
+
+    /// Refresh `entries` from `io`, prepend `..` when not at root, sort dirs then files.
     pub fn reload<F: FileIo>(&mut self, io: &mut F) -> Result<(), F::Error> {
         let mut entries = io.list(&self.path)?;
         sort_dir_entries(&mut entries);
-        if !self.path.is_empty() {
+        if !self.at_root() {
             entries.insert(
                 0,
                 DirEntry {
@@ -143,7 +164,7 @@ impl FilePickerState {
                 }
             }
             Key::Backspace => {
-                if self.path.is_empty() {
+                if self.at_root() {
                     return Ok(None);
                 }
                 self.path.pop();
@@ -363,6 +384,9 @@ pub struct FilePickerDialogState {
     pub filetype_count: usize,
     /// Which zone has keyboard focus.
     pub focus: FilePickerFocus,
+    /// Last directory navigated to; persisted by the caller between dialog open/close cycles.
+    /// On Confirm or navigation it is updated to the current path so the caller can save it.
+    pub last_dir: Vec<String>,
 }
 
 impl FilePickerDialogState {
@@ -372,9 +396,28 @@ impl FilePickerDialogState {
         filetype_count: usize,
         io: &mut F,
     ) -> Result<Self, F::Error> {
-        let mut picker = FilePickerState::new(mode);
+        Self::with_root(mode, filetype_count, Vec::new(), Vec::new(), io)
+    }
+
+    /// Create with a navigation root (cannot navigate above `root`) and an optional
+    /// previously-visited directory (`last_dir`) to restore on open.
+    ///
+    /// If `last_dir` is non-empty the picker starts there; otherwise it starts at `root`.
+    pub fn with_root<F: FileIo>(
+        mode: PickerMode,
+        filetype_count: usize,
+        root: Vec<String>,
+        last_dir: Vec<String>,
+        io: &mut F,
+    ) -> Result<Self, F::Error> {
+        let mut picker = FilePickerState::new_rooted(mode, root);
+        // If last_dir is deeper than root, restore it; otherwise stay at root.
+        if last_dir.len() > picker.root.len() {
+            picker.path = last_dir.clone();
+        }
         picker.reload(io)?;
         Ok(Self {
+            last_dir: picker.path.clone(),
             picker,
             filename: LineInput::new(),
             filetype_sel: 0,
@@ -418,6 +461,7 @@ impl FilePickerDialogState {
                         match action {
                             FilePickerAction::Navigated => {
                                 self.picker.reload(io)?;
+                                self.last_dir = self.picker.path.clone();
                                 self.filename.text.clear();
                                 self.filename.cursor = 0;
                             }
@@ -430,11 +474,12 @@ impl FilePickerDialogState {
                         }
                     }
                     Key::Backspace => {
-                        if !self.picker.path.is_empty() {
+                        if !self.picker.at_root() {
                             self.picker.path.pop();
                             self.picker.selected = 0;
                             self.picker.scroll_top = 0;
                             self.picker.reload(io)?;
+                            self.last_dir = self.picker.path.clone();
                         }
                     }
                     Key::Up => self.picker.nav_up(visible_rows),
@@ -481,17 +526,19 @@ impl FilePickerDialogState {
     }
 
     /// Attempt to confirm: filename field must be non-empty, or a file must be selected.
-    fn try_confirm(&self) -> FilePickerDialogAction {
-        let name = self.filename.text.trim();
+    fn try_confirm(&mut self) -> FilePickerDialogAction {
+        let name = String::from(self.filename.text.trim());
         if !name.is_empty() {
+            self.last_dir = self.picker.path.clone();
             return FilePickerDialogAction::Confirm {
                 path: self.picker.path.clone(),
-                name: String::from(name),
+                name,
             };
         }
         // Fall back to selected entry if it is a file
         if let Some(entry) = self.picker.entries.get(self.picker.selected) {
             if !entry.is_dir {
+                self.last_dir = self.picker.path.clone();
                 return FilePickerDialogAction::Confirm {
                     path: self.picker.path.clone(),
                     name: entry.name.clone(),
@@ -703,5 +750,71 @@ mod tests {
             Some(FilePickerAction::Navigated)
         );
         assert!(p.path.is_empty());
+    }
+
+    // ── Root clamping (T-29) ──────────────────────────────────────────────────
+
+    #[test]
+    fn root_clamps_backspace() {
+        // Root is set to ["z_dir"]; picker starts there and cannot navigate above.
+        let root = alloc::vec![String::from("z_dir")];
+        let mut p = FilePickerState::new_rooted(PickerMode::Load, root.clone());
+        let mut fs = TreeFs;
+        p.reload(&mut fs).unwrap();
+        assert!(p.at_root(), "should be at root on creation");
+        // Backspace at root does nothing
+        let r = p.interact(&mut fs, &KeyEvent::new(Key::Backspace), 8).unwrap();
+        assert_eq!(r, None);
+        assert_eq!(p.path, root, "path must not change");
+    }
+
+    #[test]
+    fn root_no_parent_entry_shown() {
+        // At root, no ".." entry should appear.
+        let root = alloc::vec![String::from("z_dir")];
+        let mut p = FilePickerState::new_rooted(PickerMode::Load, root);
+        let mut fs = TreeFs;
+        p.reload(&mut fs).unwrap();
+        assert!(p.entries.iter().all(|e| e.name != ".."), ".. must not appear at root");
+    }
+
+    #[test]
+    fn root_empty_means_volume_root_unclamped() {
+        // With empty root, ".." appears when path is non-empty (original behavior).
+        let mut p = FilePickerState::new(PickerMode::Load);
+        let mut fs = TreeFs;
+        p.path.push(String::from("z_dir"));
+        p.reload(&mut fs).unwrap();
+        assert!(p.entries.iter().any(|e| e.name == ".."), ".. must appear below volume root");
+    }
+
+    #[test]
+    fn with_root_restores_last_dir() {
+        let root = alloc::vec![];
+        let last = alloc::vec![String::from("z_dir")];
+        let mut fs = TreeFs;
+        let dlg = FilePickerDialogState::with_root(PickerMode::Load, 1, root, last.clone(), &mut fs).unwrap();
+        assert_eq!(dlg.picker.path, last, "should start in last_dir");
+        assert_eq!(dlg.last_dir, last);
+    }
+
+    #[test]
+    fn last_dir_updated_on_navigation() {
+        let mut dlg = FilePickerDialogState::new(PickerMode::Load, 1, &mut TreeFs).unwrap();
+        // Navigate into z_dir
+        dlg.picker.selected = 0; // z_dir
+        dlg.handle_key(&KeyEvent::new(Key::Enter), 8, &mut TreeFs).unwrap();
+        assert_eq!(dlg.last_dir, alloc::vec![String::from("z_dir")]);
+    }
+
+    #[test]
+    fn last_dir_updated_on_confirm() {
+        let mut dlg = FilePickerDialogState::new(PickerMode::Load, 1, &mut TreeFs).unwrap();
+        dlg.picker.selected = 1; // a.txt
+        dlg.handle_key(&KeyEvent::new(Key::Enter), 8, &mut TreeFs).unwrap();
+        // Now in FilenameField with "a.txt"
+        let action = dlg.handle_key(&KeyEvent::new(Key::Enter), 8, &mut TreeFs).unwrap();
+        assert!(matches!(action, FilePickerDialogAction::Confirm { .. }));
+        assert_eq!(dlg.last_dir, alloc::vec![] as Vec<String>, "confirmed at root");
     }
 }

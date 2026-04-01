@@ -27,3 +27,32 @@ impl Checkbox {
         self.inner.set(checked);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starts_unchecked() {
+        let cb = Checkbox::new(false);
+        assert!(!cb.checked());
+    }
+
+    #[test]
+    fn toggle_flips_state() {
+        let mut cb = Checkbox::new(false);
+        cb.toggle();
+        assert!(cb.checked());
+        cb.toggle();
+        assert!(!cb.checked());
+    }
+
+    #[test]
+    fn set_forces_value() {
+        let mut cb = Checkbox::new(false);
+        cb.set(true);
+        assert!(cb.checked());
+        cb.set(false);
+        assert!(!cb.checked());
+    }
+}

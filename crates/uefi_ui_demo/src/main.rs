@@ -48,14 +48,14 @@ use uefi_ui::window::{WindowOffset, WindowStack};
 mod absolute_pointer;
 
 use absolute_pointer::{abs_state_key, map_abs_to_pixels, primary_button, right_button, AbsolutePointer};
-use uefi_ui_demo::demo_gallery::{
+use uefi_ui_test::demo_gallery::{
     apply_gallery_key_event, gallery_pointer_down, GalleryState,
 };
-use uefi_ui_demo::layout::{
+use uefi_ui_test::layout::{
     compute_layout, submenu_popup_rect, Focus, UiLayout, MENU_LABELS, SUBMENUS,
 };
-use uefi_ui_demo::tab_order::apply_tab;
-use uefi_ui_demo::scene::{decode_demo_png, paint_scene_no_cursor, DEMO_PNG_BYTES};
+use uefi_ui_test::tab_order::apply_tab;
+use uefi_ui_test::scene::{decode_demo_png, paint_scene_no_cursor, DEMO_PNG_BYTES};
 
 const ABOUT_MODAL_ID: u64 = 1;
 

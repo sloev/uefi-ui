@@ -18,3 +18,24 @@ impl Toggle {
         self.on = on;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flip_inverts() {
+        let mut t = Toggle::new(false);
+        t.flip();
+        assert!(t.on);
+        t.flip();
+        assert!(!t.on);
+    }
+
+    #[test]
+    fn set_overrides() {
+        let mut t = Toggle::new(true);
+        t.set(false);
+        assert!(!t.on);
+    }
+}

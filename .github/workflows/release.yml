@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release-skriver:
+    name: Build and release skriver ISO
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-uefi
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y mtools dosfstools xorriso
+
+      - name: Build skriver ISO
+        run: make iso-skriver
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skriver-build-${{ github.run_number }}
+          name: skriver build ${{ github.run_number }}
+          body: |
+            Bootable UEFI text editor ISO.
+
+            Boot with QEMU:
+            ```
+            qemu-system-x86_64 -machine q35 -m 256M \
+              -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+              -drive file=skriver.iso,format=raw,if=none,id=cd \
+              -device ide-cd,drive=cd,bus=ide.1
+            ```
+
+            Commit: ${{ github.sha }}
+          files: target/skriver.iso
+
+  release-uefi-ui:
+    name: Test and release uefi_ui crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run library tests
+        run: cargo test -p uefi_ui
+
+      - name: Package crate
+        run: cargo package -p uefi_ui --allow-dirty
+
+      - name: Find crate file
+        id: crate_file
+        run: |
+          f=$(ls target/package/uefi_ui-*.crate | head -1)
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename $f)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: uefi-ui-build-${{ github.run_number }}
+          name: uefi_ui build ${{ github.run_number }}
+          body: |
+            uefi_ui library crate source package.
+
+            Install locally:
+            ```
+            cargo add --path crates/uefi_ui
+            ```
+
+            Commit: ${{ github.sha }}
+          files: ${{ steps.crate_file.outputs.path }}

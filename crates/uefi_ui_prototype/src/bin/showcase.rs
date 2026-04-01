@@ -641,7 +641,7 @@ fn render_tree_view(out: &str, theme: &Theme, bevel: &BedrockBevel) {
 
 // ─── editor screenshots ───────────────────────────────────────────────────────
 
-const TINOS_PATH: &str = "../../../../assets/fonts/Tinos-Regular.ttf";
+const TINOS_PATH: &str = "assets/fonts/Tinos-Regular.ttf";
 
 const ED_W: u32 = 900;
 const ED_H: u32 = 660;

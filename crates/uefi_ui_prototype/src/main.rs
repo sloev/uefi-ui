@@ -1,7 +1,7 @@
 //! **Fast UI iteration on Linux**: writes `target/uefi_ui_prototype.png` (or path argument).
 //!
 //! - Default: **Bedrock** teal desktop, gray dialog, 3D bevels.
-//! - `cargo run -p uefi_ui_prototype -- demo` — **same paint path** as the firmware app ([`uefi_ui_demo::scene::paint_demo_snapshot`]).
+//! - `cargo run -p uefi_ui_prototype -- demo` — **same paint path** as the firmware app ([`uefi_ui_test::scene::paint_demo_snapshot`]).
 
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::Pixel;
@@ -74,13 +74,13 @@ fn main() {
     }
 }
 
-/// Renders [`uefi_ui_demo::scene::paint_demo_snapshot`] into a BGRX buffer, then blits RGB to the simulator (same scene as the `.efi` demo, without UEFI I/O).
+/// Renders [`uefi_ui_test::scene::paint_demo_snapshot`] into a BGRX buffer, then blits RGB to the simulator (same scene as the `.efi` demo, without UEFI I/O).
 fn paint_uefi_demo_like_frame(display: &mut SimulatorDisplay<Rgb888>) {
     let w = display.size().width;
     let h = display.size().height;
     let stride = w as usize * 4;
     let mut buf = vec![0u8; stride * h as usize];
-    uefi_ui_demo::scene::paint_demo_snapshot(&mut buf, w, h, stride, None).expect("paint_demo_snapshot");
+    uefi_ui_test::scene::paint_demo_snapshot(&mut buf, w, h, stride, None).expect("paint_demo_snapshot");
     let fb = BgrxFramebuffer::new(&mut buf, w, h, stride).expect("framebuffer");
     for y in 0..h {
         for x in 0..w {

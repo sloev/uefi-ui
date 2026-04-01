@@ -24,5 +24,5 @@ required-features = ["sdl"]
 embedded-graphics = "0.8"
 embedded-graphics-simulator = { version = "0.8", default-features = false }
 uefi_ui = { path = "../uefi_ui" }
-uefi_ui_demo = { path = "../uefi_ui_demo" }
+uefi_ui_test = { path = "../uefi_ui_demo" }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
