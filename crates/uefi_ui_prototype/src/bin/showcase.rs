@@ -758,7 +758,7 @@ fn ed_draw_title(d: &mut Disp, bevel: &BedrockBevel, theme: &Theme, title: &str)
 fn ed_draw_menubar(d: &mut Disp, theme: &Theme, open_menu: Option<usize>) {
     let bar = Rectangle::new(Point::new(0, ED_TITLE_H), Size::new(ED_W, ED_MENU_H as u32));
     ed_fill(d, bar, theme.colors.surface);
-    let items = &["File", "Edit", "View"];
+    let items = &["File", "Edit"];
     let cell_w = 54i32;
     let mut cx = 4i32;
     for (i, lbl) in items.iter().enumerate() {
@@ -792,21 +792,25 @@ fn ed_draw_menubar(d: &mut Disp, theme: &Theme, open_menu: Option<usize>) {
 }
 
 fn ed_draw_file_menu_popup(d: &mut Disp, bevel: &BedrockBevel, theme: &Theme, sel: usize) {
-    use uefi_ui::bedrock_controls::draw_menu_popup;
+    use uefi_ui::bedrock_controls::draw_menu_popup_ex;
     let items = &[
         "New\tCtrl+N",
+        "Open Last File",
         "Open...\tCtrl+O",
         "Save\tCtrl+S",
         "Save As...",
         "—",
-        "Exit",
+        "Exit\tCtrl+Q",
     ];
-    let popup = Rectangle::new(Point::new(4, ED_TITLE_H + ED_MENU_H), Size::new(200, 140));
-    draw_menu_popup(
+    // "Open Last File" is greyed (index 1) — no last file in this screenshot
+    let disabled = &[false, true, false, false, false, false, false];
+    let popup = Rectangle::new(Point::new(4, ED_TITLE_H + ED_MENU_H), Size::new(200, 160));
+    draw_menu_popup_ex(
         d,
         bevel,
         popup,
         items,
+        disabled,
         sel,
         22,
         &FONT_6X10,
@@ -1079,7 +1083,7 @@ fn render_editor_with_filepicker(
             clip,
         );
     }
-    ed_draw_title(&mut d, bevel, theme, "sample.txt — Text Editor");
+    ed_draw_title(&mut d, bevel, theme, "Lotus OS -- sample.txt");
     ed_draw_menubar(&mut d, theme, None);
     ed_draw_status(
         &mut d,
@@ -1211,7 +1215,7 @@ fn main() {
             render_editor_screenshot(
                 &font,
                 14.0,
-                "Untitled — Text Editor",
+                "Lotus OS -- [untitled]",
                 "",
                 None,
                 false,
@@ -1225,7 +1229,7 @@ fn main() {
             render_editor_screenshot(
                 &font,
                 14.0,
-                "sample.txt — Text Editor",
+                "Lotus OS -- sample.txt",
                 SAMPLE_TEXT,
                 None,
                 false,
@@ -1239,7 +1243,7 @@ fn main() {
             render_editor_screenshot(
                 &font,
                 14.0,
-                "sample.txt — Text Editor",
+                "Lotus OS -- sample.txt",
                 SAMPLE_TEXT,
                 Some(0),
                 false,
@@ -1253,7 +1257,7 @@ fn main() {
             render_editor_screenshot(
                 &font,
                 14.0,
-                "sample.txt — Text Editor",
+                "Lotus OS -- sample.txt",
                 SAMPLE_TEXT,
                 None,
                 true,
@@ -1268,7 +1272,7 @@ fn main() {
             render_editor_screenshot(
                 &font,
                 20.0,
-                "sample.txt — Text Editor",
+                "Lotus OS -- sample.txt",
                 SAMPLE_TEXT,
                 None,
                 false,
