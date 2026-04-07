@@ -883,6 +883,61 @@ pub fn draw_menu_popup<D: DrawTarget<Color = Rgb888>>(
     Ok(())
 }
 
+/// Like [`draw_menu_popup`] but with per-item disabled flags.
+///
+/// `disabled[j] = true` renders item `j` in the classic embossed gray style and
+/// keeps it unselectable visually (the caller is responsible for not activating it).
+/// If `disabled` is shorter than `items`, missing entries are treated as enabled.
+pub fn draw_menu_popup_ex<D: DrawTarget<Color = Rgb888>>(
+    target: &mut D,
+    bevel: &BedrockBevel,
+    popup: Rectangle,
+    items: &[&str],
+    disabled: &[bool],
+    selected_i: usize,
+    line_h: i32,
+    font: &MonoFont<'_>,
+    canvas: Rgb888,
+    text: Rgb888,
+    selection_bg: Rgb888,
+    caption_on_accent: Rgb888,
+) -> Result<(), D::Error> {
+    bevel.draw_raised_soft(target, popup)?;
+    let inner = pad(popup, 3);
+    Rectangle::new(inner.top_left, inner.size)
+        .into_styled(PrimitiveStyle::with_fill(canvas))
+        .draw(target)?;
+    for (j, name) in items.iter().enumerate() {
+        let row_y = popup.top_left.y + MENU_POPUP_TOP_PAD + j as i32 * line_h;
+        if *name == "—" {
+            let sep_y = row_y + line_h / 2 - 1;
+            let x0 = popup.top_left.x + MENU_POPUP_PAD_X;
+            let x1 = popup.top_left.x + popup.size.width as i32 - MENU_POPUP_PAD_X;
+            draw_separator_h(target, bevel, x0, x1, sep_y)?;
+            continue;
+        }
+        let is_disabled = disabled.get(j).copied().unwrap_or(false);
+        let row_sel = !is_disabled && selected_i == j;
+        let bg = if row_sel { selection_bg } else { canvas };
+        let rw = popup.size.width.saturating_sub(4);
+        Rectangle::new(
+            Point::new(popup.top_left.x + 2, row_y),
+            Size::new(rw, line_h as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(bg))
+        .draw(target)?;
+        let font_h = font.character_size.height as i32;
+        let label_pt = Point::new(popup.top_left.x + MENU_POPUP_PAD_X, row_y + (line_h - font_h) / 2);
+        if is_disabled {
+            draw_label_disabled(target, name, font, label_pt.x, label_pt.y, bevel.border_dark, bevel.border_lightest)?;
+        } else {
+            let fg = if row_sel { caption_on_accent } else { text };
+            draw_mnemonic_label(target, name, font, label_pt, fg)?;
+        }
+    }
+    Ok(())
+}
+
 // ── File picker icon glyphs ───────────────────────────────────────────────────
 
 /// 16×16 folder icon — Bedrock style.

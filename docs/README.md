@@ -12,10 +12,11 @@ Bedrock-style visual system (3D bevels, teal desktop, navy title bars).
 - **`uefi_ui`** -- widget state, layout, keyboard/mouse abstractions, Bedrock chrome helpers,
   file picker with root-clamping and persistent last-dir, editor settings persisted in UEFI NVRAM.
   Runs on bare UEFI with no operating system underneath. 105 unit tests, runs on host with `cargo test`.
-- **`skriver`** -- bootable UEFI text editor. Boots directly to a full-screen editor.
-  File picker rooted to user-accessible USB/removable volumes (EFI partitions hidden).
-  Settings (font size, theme, last file, last directory) persisted in UEFI NVRAM between boots.
-  Build with `make build-skriver`; bootable ISO with `make iso-skriver`.
+- **`lotus-os`** -- bootable UEFI text editor. Boots directly to a full-screen editor.
+  Opens the last edited file automatically on boot. File and Edit menus with copy, paste,
+  select all, and find. File picker rooted to user-accessible USB/removable volumes (EFI partitions hidden).
+  Settings (last file, last directory) persisted in UEFI NVRAM between boots.
+  Build with `make build-lotus`; bootable ISO with `make iso-lotus`.
 - **`uefi_ui_test`** (`crates/uefi_ui_demo/`) -- end-to-end test app exercising all widgets
   under UEFI / QEMU. Used by `make qemu`.
 - **`uefi_ui_prototype`** -- Linux-hosted simulator for fast visual iteration
@@ -46,17 +47,34 @@ cargo run -p uefi_ui_prototype --features sdl             # widget gallery
 cargo run -p uefi_ui_prototype --bin editor --features sdl # text editor
 ```
 
-### skriver -- bootable text editor
+### Lotus OS -- bootable text editor
 
 ```sh
-make build-skriver   # cross-compile for x86_64-unknown-uefi
-make iso-skriver     # produce target/skriver.iso (needs mtools, xorriso, dosfstools)
+make build-lotus   # cross-compile for x86_64-unknown-uefi
+make iso-lotus     # produce target/lotus-os.iso (needs mtools, xorriso, dosfstools)
 # Boot in QEMU:
 qemu-system-x86_64 -machine q35 -m 256M \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-  -drive file=target/skriver.iso,format=raw,if=none,id=cd \
+  -drive file=target/lotus-os.iso,format=raw,if=none,id=cd \
   -device ide-cd,drive=cd,bus=ide.1
 ```
+
+### Lotus OS keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| Ctrl+N | New file |
+| Ctrl+O | Open file (USB picker) |
+| Ctrl+S | Save (in-place if file is open, picker if new) |
+| Ctrl+C | Copy selection |
+| Ctrl+V | Paste |
+| Ctrl+A | Select all |
+| Ctrl+F | Find (Escape to close, Enter for next match) |
+| Ctrl+Q | Quit |
+| F10 | Open menu bar |
+| Escape | Close menu / find bar |
+
+---
 
 ### UEFI test app (widget gallery + editor)
 

@@ -224,6 +224,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "lotus-os"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "uefi",
+ "uefi-raw",
+ "uefi_ui",
+]
+
+[[package]]
 name = "micromath"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -386,16 +396,6 @@ name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
-
-[[package]]
-name = "skriver"
-version = "0.1.0"
-dependencies = [
- "fontdue",
- "uefi",
- "uefi-raw",
- "uefi_ui",
-]
 
 [[package]]
 name = "static_assertions"

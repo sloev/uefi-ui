@@ -103,18 +103,18 @@ qemu: $(OVMF_VARS) build-uefi
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-drive file=fat:rw:$(ESP)/,format=raw
 
-build-skriver:
+build-lotus:
 	$(RUSTUP) target add $(UEFI_TARGET)
-	$(CARGO) build -p skriver --target $(UEFI_TARGET) --release
+	$(CARGO) build -p lotus-os --target $(UEFI_TARGET) --release
 
-iso-skriver: build-skriver
+iso-lotus: build-lotus
 	@rel="$(CURDIR)/target/$(UEFI_TARGET)/release"; \
-	efi="$$rel/skriver.efi"; \
-	if [ ! -f "$$efi" ]; then efi="$$rel/skriver"; fi; \
-	if [ ! -f "$$efi" ]; then echo "Missing skriver binary at $$efi"; exit 1; fi; \
-	esp_img="$(CURDIR)/target/skriver_esp.img"; \
-	iso_out="$(CURDIR)/target/skriver.iso"; \
-	stage="$(CURDIR)/target/skriver_iso_stage"; \
+	efi="$$rel/lotus-os.efi"; \
+	if [ ! -f "$$efi" ]; then efi="$$rel/lotus-os"; fi; \
+	if [ ! -f "$$efi" ]; then echo "Missing lotus-os binary at $$efi"; exit 1; fi; \
+	esp_img="$(CURDIR)/target/lotus_os_esp.img"; \
+	iso_out="$(CURDIR)/target/lotus-os.iso"; \
+	stage="$(CURDIR)/target/lotus_os_iso_stage"; \
 	rm -rf "$$stage" && mkdir -p "$$stage"; \
 	rm -f "$$esp_img"; \
 	dd if=/dev/zero of="$$esp_img" bs=1M count=16 status=none; \
@@ -123,7 +123,7 @@ iso-skriver: build-skriver
 	MTOOLS_SKIP_CHECK=1 mmd -i "$$esp_img" ::/EFI/BOOT 2>/dev/null || true; \
 	MTOOLS_SKIP_CHECK=1 mcopy -i "$$esp_img" -o "$$efi" ::/EFI/BOOT/BOOTX64.EFI; \
 	cp "$$esp_img" "$$stage/esp_uefi.img"; \
-	(cd "$$stage" && xorriso -as mkisofs -o "$$iso_out" -V SKRIVER -e esp_uefi.img -no-emul-boot .); \
+	(cd "$$stage" && xorriso -as mkisofs -o "$$iso_out" -V LOTUS_OS -e esp_uefi.img -no-emul-boot .); \
 	echo "Wrote $$iso_out"
 
 iso:

@@ -8,8 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  release-skriver:
-    name: Build and release skriver ISO
+  release-lotus-os:
+    name: Build and release Lotus OS ISO
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,27 +22,27 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y mtools dosfstools xorriso
 
-      - name: Build skriver ISO
-        run: make iso-skriver
+      - name: Build Lotus OS ISO
+        run: make iso-lotus
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: skriver-build-${{ github.run_number }}
-          name: skriver build ${{ github.run_number }}
+          tag_name: lotus-os-build-${{ github.run_number }}
+          name: Lotus OS build ${{ github.run_number }}
           body: |
-            Bootable UEFI text editor ISO.
+            Lotus OS — bootable UEFI text editor ISO.
 
             Boot with QEMU:
             ```
             qemu-system-x86_64 -machine q35 -m 256M \
               -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-              -drive file=skriver.iso,format=raw,if=none,id=cd \
+              -drive file=lotus-os.iso,format=raw,if=none,id=cd \
               -device ide-cd,drive=cd,bus=ide.1
             ```
 
             Commit: ${{ github.sha }}
-          files: target/skriver.iso
+          files: target/lotus-os.iso
 
   release-uefi-ui:
     name: Test and release uefi_ui crate

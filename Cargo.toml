@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/uefi_ui", "crates/uefi_ui_prototype", "crates/uefi_ui_demo", "crates/skriver"]
+members = ["crates/uefi_ui", "crates/uefi_ui_prototype", "crates/uefi_ui_demo", "crates/lotus_os"]
 
 [workspace.package]
 edition = "2021"

@@ -1,4 +1,4 @@
-//! **skriver** -- bootable UEFI text editor.
+//! **Lotus OS** -- bootable UEFI text editor.
 //!
 //! Boots directly to a full-screen editor. File picker is rooted to user-accessible
 //! USB/removable volumes (EFI partitions are hidden). Settings (font size, theme,
@@ -24,7 +24,7 @@ use uefi::CString16;
 use uefi_ui::bedrock::BedrockBevel;
 use uefi_ui::bedrock_controls::{
     compute_file_picker_layout, draw_file_picker, draw_menu_bar, draw_menu_popup,
-    draw_window_title_bar, FP_SB_W,
+    draw_menu_popup_ex, draw_window_title_bar, FP_SB_W,
 };
 use uefi_ui::editor_settings::EditorSettings;
 use uefi_ui::embedded_graphics::mono_font::ascii::FONT_6X10;
@@ -33,13 +33,13 @@ use uefi_ui::embedded_graphics::prelude::*;
 use uefi_ui::embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use uefi_ui::embedded_graphics::text::{Baseline, Text};
 use uefi_ui::embedded_graphics::geometry::{Point, Size};
-use uefi_ui::file_picker::{FileIo, FilePickerDialogAction, FilePickerDialogState, PickerMode};
+use uefi_ui::file_picker::{FileIo, FilePickerDialogAction, FilePickerDialogState, LineInput, PickerMode};
 use uefi_ui::framebuffer::BgrxFramebuffer;
 use uefi_ui::input::{Key, KeyEvent, Modifiers};
 use uefi_ui::theme::Theme;
 use uefi_ui::uefi_vars::{load_settings_blob, save_settings_blob};
 use uefi_ui::{find_user_fs_handles, list_simple_fs_handles, SimpleFsIo};
-use uefi_ui::widgets::{textarea_sync_vertical_scroll, ScrollAxis, ScrollbarState, TextArea};
+use uefi_ui::widgets::{ScrollAxis, ScrollbarState, TextArea};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TITLE_H: i32 = 20;
@@ -47,14 +47,43 @@ const MENU_H:  i32 = 20;
 const SB_W:    i32 = 18;
 const LINE_H:  i32 = 10;
 const CHAR_W:  i32 = 6;
+const FIND_H:  i32 = 20;
 
 // ── Menus ────────────────────────────────────────────────────────────────────
-const MENU_LABELS: &[&str] = &["&File"];
-const FILE_MENU:   &[&str] = &["&New", "&Open...", "&Save", "Save &As...", "--",
-                                "&Delete file", "--", "E&xit"];
+const MENU_LABELS: &[&str] = &["&File", "&Edit"];
+
+const FILE_MENU: &[&str] = &[
+    "&New",
+    "Open &Last File",
+    "&Open...",
+    "&Save",
+    "Save &As...",
+    "--",
+    "E&xit",
+];
+const FILE_IDX_NEW:       usize = 0;
+const FILE_IDX_OPEN_LAST: usize = 1;
+const FILE_IDX_OPEN:      usize = 2;
+const FILE_IDX_SAVE:      usize = 3;
+const FILE_IDX_SAVE_AS:   usize = 4;
+const FILE_IDX_EXIT:      usize = 6;
+
+const EDIT_MENU: &[&str] = &[
+    "&Copy",
+    "&Paste",
+    "Select &All",
+    "&Deselect",
+    "--",
+    "&Find",
+];
+const EDIT_IDX_COPY:       usize = 0;
+const EDIT_IDX_PASTE:      usize = 1;
+const EDIT_IDX_SELECT_ALL: usize = 2;
+const EDIT_IDX_DESELECT:   usize = 3;
+const EDIT_IDX_FIND:       usize = 5;
 
 fn settings_var_name() -> CString16 {
-    CString16::try_from("SkriverSettings").unwrap_or_else(|_| CString16::try_from("S").unwrap())
+    CString16::try_from("LotusSettings").unwrap_or_else(|_| CString16::try_from("L").unwrap())
 }
 
 fn load_settings() -> EditorSettings {
@@ -104,23 +133,6 @@ fn map_key(k: UefiKey) -> Option<KeyEvent> {
     }
 }
 
-// ── Scrollbar sync ────────────────────────────────────────────────────────────
-fn scroll_keys(ta: &mut TextArea, sb: &mut ScrollbarState, ev: &KeyEvent, vl: usize) {
-    let vl = vl.max(1);
-    let max_top = ta.line_count().saturating_sub(vl);
-    match ev.key {
-        Key::Up       => { ta.scroll_top_line = ta.scroll_top_line.saturating_sub(1); }
-        Key::Down     => { ta.scroll_top_line = (ta.scroll_top_line + 1).min(max_top); }
-        Key::PageUp   => { ta.scroll_top_line = ta.scroll_top_line.saturating_sub(vl); }
-        Key::PageDown => { ta.scroll_top_line = (ta.scroll_top_line + vl).min(max_top); }
-        Key::Home     => { ta.scroll_top_line = 0; }
-        Key::End      => { ta.scroll_top_line = max_top; }
-        _ => {}
-    }
-    ta.scroll_top_line = ta.scroll_top_line.min(max_top);
-    textarea_sync_vertical_scroll(ta, vl, 0, sb);
-}
-
 // ── Compute popup rect under a menu cell ─────────────────────────────────────
 fn popup_rect_for(cell: &Rectangle, items: &[&str]) -> Rectangle {
     let max_ch = items.iter()
@@ -134,7 +146,7 @@ fn popup_rect_for(cell: &Rectangle, items: &[&str]) -> Rectangle {
     )
 }
 
-// ── Open picker helper ────────────────────────────────────────────────────────
+// ── Open file picker helper ───────────────────────────────────────────────────
 fn open_picker(mode: PickerMode, last_dir: &[String]) -> Option<FilePickerDialogState> {
     let user = find_user_fs_handles();
     let all  = list_simple_fs_handles();
@@ -144,12 +156,40 @@ fn open_picker(mode: PickerMode, last_dir: &[String]) -> Option<FilePickerDialog
     FilePickerDialogState::with_root(mode, 2, alloc::vec![], last_dir.to_vec(), &mut io).ok()
 }
 
+// ── Try to load the last opened file ─────────────────────────────────────────
+fn try_load_last_file(settings: &EditorSettings) -> Option<(Vec<u8>, Vec<String>, String)> {
+    if settings.last_file.is_empty() { return None; }
+    let last_dir = settings.last_dir_path();
+    let user = find_user_fs_handles();
+    let all  = list_simple_fs_handles();
+    let h = user.first().or_else(|| all.first()).copied()?;
+    let mut fs = open_protocol_exclusive::<SimpleFileSystem>(h).ok()?;
+    let mut io = SimpleFsIo { fs: &mut *fs };
+    let bytes = io.read_file(&last_dir, &settings.last_file).ok()?;
+    Some((bytes, last_dir, settings.last_file.clone()))
+}
+
+// ── Find: return byte (lo, hi) pairs of all matches ──────────────────────────
+fn find_in(text: &str, query: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    if query.is_empty() { return out; }
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(query) {
+        let lo = start + pos;
+        let hi = lo + query.len();
+        out.push((lo, hi));
+        start = lo + 1;
+        if start >= text.len() { break; }
+    }
+    out
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 #[entry]
 fn main() -> Status {
     uefi::helpers::init().unwrap();
 
-    // Enumerate and connect all handles so USB HID drivers bind
+    // Connect all handles so USB HID drivers bind
     if let Ok(handles) = boot::locate_handle_buffer(uefi::boot::SearchType::AllHandles) {
         for &h in handles.iter() { let _ = boot::connect_controller(h, None, None, true); }
     }
@@ -159,7 +199,7 @@ fn main() -> Status {
     let mut gop = open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
     let info = gop.current_mode_info();
     if info.pixel_format() != PixelFormat::Bgr {
-        uefi::println!("[skriver] pixel format {:?} unsupported", info.pixel_format());
+        uefi::println!("[lotus-os] pixel format {:?} unsupported", info.pixel_format());
         return Status::UNSUPPORTED;
     }
     let (w, h) = info.resolution();
@@ -179,22 +219,24 @@ fn main() -> Status {
     let bevel = BedrockBevel::CLASSIC;
     let font  = &FONT_6X10;
 
-    // ── Layout geometry ──────────────────────────────────────────────────────
-    let status_h = LINE_H + 4;
+    // ── Layout ───────────────────────────────────────────────────────────────
+    let status_h   = LINE_H + 4;
     let editor_top = TITLE_H + MENU_H;
     let editor_bot = h as i32 - status_h;
     let editor_h   = (editor_bot - editor_top).max(0) as u32;
     let visible_lines = (editor_h as i32 / LINE_H).max(0) as usize;
 
-    let title_rect  = Rectangle::new(Point::zero(), Size::new(w as u32, TITLE_H as u32));
-    let menu_strip  = Rectangle::new(Point::new(0, TITLE_H), Size::new(w as u32, MENU_H as u32));
-    let editor_rect = Rectangle::new(Point::new(0, editor_top), Size::new(w as u32, editor_h));
-    let sb_rect     = Rectangle::new(Point::new(w as i32 - SB_W, editor_top), Size::new(SB_W as u32, editor_h));
-    let inner_rect  = Rectangle::new(
+    let title_rect   = Rectangle::new(Point::zero(), Size::new(w as u32, TITLE_H as u32));
+    let menu_strip   = Rectangle::new(Point::new(0, TITLE_H), Size::new(w as u32, MENU_H as u32));
+    let editor_rect  = Rectangle::new(Point::new(0, editor_top), Size::new(w as u32, editor_h));
+    let sb_rect      = Rectangle::new(Point::new(w as i32 - SB_W, editor_top), Size::new(SB_W as u32, editor_h));
+    let inner_rect   = Rectangle::new(
         Point::new(1, editor_top + 1),
         Size::new((w as i32 - SB_W - 2).max(0) as u32, editor_h.saturating_sub(2)),
     );
-    let status_rect = Rectangle::new(Point::new(0, editor_bot), Size::new(w as u32, status_h as u32));
+    let status_rect  = Rectangle::new(Point::new(0, editor_bot), Size::new(w as u32, status_h as u32));
+    let find_bar_y   = editor_bot - FIND_H;
+    let find_bar_rect = Rectangle::new(Point::new(0, find_bar_y), Size::new(w as u32, FIND_H as u32));
 
     // Menu cell geometry
     let menu_cells: Vec<Rectangle> = {
@@ -209,18 +251,33 @@ fn main() -> Status {
     };
 
     // ── Editor state ──────────────────────────────────────────────────────────
-    let init_text = if !settings.last_file.is_empty() {
-        format!("Last file: {}  (Ctrl+O to reopen)", settings.last_file)
-    } else {
-        String::from("")
-    };
-    let mut textarea = TextArea::from_str(&init_text);
-    let mut sb = ScrollbarState::new(ScrollAxis::Vertical, 1, 1, 0);
+    let mut textarea = TextArea::from_str("");
+    let mut _sb = ScrollbarState::new(ScrollAxis::Vertical, 1, 1, 0);
     let mut current_file: Option<(Vec<String>, String)> = None;
     let mut last_dir = settings.last_dir_path();
     let mut picker_mode = PickerMode::Load;
 
-    // ── File picker state ────────────────────────────────────────────────────
+    // Auto-open last file on boot
+    let boot_status = if let Some((bytes, dir, name)) = try_load_last_file(&settings) {
+        let text = core::str::from_utf8(&bytes).unwrap_or("[binary]");
+        textarea = TextArea::from_str(text);
+        current_file = Some((dir.clone(), name.clone()));
+        last_dir = dir;
+        format!("Opened: {}  --  Ctrl+N New  Ctrl+S Save  Ctrl+F Find  Ctrl+Q Quit", name)
+    } else {
+        String::from("Ctrl+O Open  Ctrl+N New  Ctrl+S Save  Ctrl+F Find  Ctrl+Q Quit  F10 Menu")
+    };
+
+    // ── Clipboard ────────────────────────────────────────────────────────────
+    let mut clipboard: String = String::new();
+
+    // ── Find bar ─────────────────────────────────────────────────────────────
+    let mut find_visible = false;
+    let mut find_input   = LineInput::new();
+    let mut find_list: Vec<(usize, usize)> = Vec::new();
+    let mut find_current: usize = 0;
+
+    // ── File picker ───────────────────────────────────────────────────────────
     let mut file_picker: Option<FilePickerDialogState> = None;
     let mut fp_sb = ScrollbarState::new(ScrollAxis::Vertical, 1, 1, 0);
 
@@ -228,20 +285,19 @@ fn main() -> Status {
     let mut menu_open: Option<usize> = None;
     let mut menu_sel: usize = 0;
 
-    // ── Status message ────────────────────────────────────────────────────────
-    let mut status: String = String::from("Ctrl+O Open  Ctrl+S Save  Ctrl+N New  Ctrl+Q Quit  F10 Menu");
+    // ── Status ────────────────────────────────────────────────────────────────
+    let mut status: String = boot_status;
 
-    // ── Keyboard input ────────────────────────────────────────────────────────
+    // ── Input ─────────────────────────────────────────────────────────────────
     let stdin = boot::get_handle_for_protocol::<Input>().unwrap();
     let mut kb = open_protocol_exclusive::<Input>(stdin).unwrap();
 
-    // ── Timer ─────────────────────────────────────────────────────────────────
     let timer = unsafe {
         boot::create_event(EventType::TIMER, Tpl::APPLICATION, None, None).unwrap()
     };
     boot::set_timer(&timer, TimerTrigger::Periodic(166_666)).unwrap();
 
-    uefi::println!("[skriver] {}x{} ready", w, h);
+    uefi::println!("[lotus-os] {}x{} ready", w, h);
 
     let mut dirty = true;
 
@@ -249,17 +305,16 @@ fn main() -> Status {
         let mut events = [kb.wait_for_key_event().unwrap(), unsafe { timer.unsafe_clone() }];
         let _ = boot::wait_for_event(&mut events);
 
-        // ── Read keys ────────────────────────────────────────────────────────
         while let Ok(Some(raw)) = kb.read_key() {
             let Some(ev) = map_key(raw) else { continue };
 
-            // ── File picker: route all keys here ─────────────────────────────
+            // ── File picker ──────────────────────────────────────────────────
             if file_picker.is_some() {
                 let mut fp = file_picker.take().unwrap();
                 let user = find_user_fs_handles();
                 let all  = list_simple_fs_handles();
-                let action = if let Some(h) = user.first().or_else(|| all.first()).copied() {
-                    if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(h) {
+                let action = if let Some(fh) = user.first().or_else(|| all.first()).copied() {
+                    if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(fh) {
                         let mut io = SimpleFsIo { fs: &mut *fs };
                         fp.handle_key(&ev, visible_lines, &mut io)
                             .unwrap_or(FilePickerDialogAction::None)
@@ -271,8 +326,8 @@ fn main() -> Status {
                         last_dir = fp.last_dir.clone();
                         let user2 = find_user_fs_handles();
                         let all2  = list_simple_fs_handles();
-                        if let Some(h) = user2.first().or_else(|| all2.first()).copied() {
-                            if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(h) {
+                        if let Some(fh) = user2.first().or_else(|| all2.first()).copied() {
+                            if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(fh) {
                                 let mut io = SimpleFsIo { fs: &mut *fs };
                                 if picker_mode == PickerMode::Load {
                                     match io.read_file(&path, &name) {
@@ -308,10 +363,38 @@ fn main() -> Status {
                         status = String::from("Cancelled.");
                     }
                     FilePickerDialogAction::None => {
-                        // Keep picker open
                         let n = fp.picker.entries.len().max(1);
                         fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), fp.picker.scroll_top);
                         file_picker = Some(fp);
+                    }
+                }
+                dirty = true;
+                continue;
+            }
+
+            // ── Find bar ─────────────────────────────────────────────────────
+            if find_visible {
+                match ev.key {
+                    Key::Escape => {
+                        find_visible = false;
+                        find_list.clear();
+                        status = String::from("Find closed.");
+                    }
+                    Key::Enter => {
+                        if !find_list.is_empty() {
+                            find_current = (find_current + 1) % find_list.len();
+                            status = format!("Match {} of {}", find_current + 1, find_list.len());
+                        }
+                    }
+                    _ => {
+                        find_input.apply_key(ev.key);
+                        find_list = find_in(&textarea.text, &find_input.text);
+                        find_current = 0;
+                        status = if find_list.is_empty() {
+                            format!("No matches for: {}", find_input.text)
+                        } else {
+                            format!("{} match(es)  Enter=next  Escape=close", find_list.len())
+                        };
                     }
                 }
                 dirty = true;
@@ -348,11 +431,10 @@ fn main() -> Status {
                         if let Some((ref path, ref name)) = current_file.clone() {
                             let user = find_user_fs_handles();
                             let all  = list_simple_fs_handles();
-                            if let Some(h) = user.first().or_else(|| all.first()).copied() {
-                                if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(h) {
+                            if let Some(fh) = user.first().or_else(|| all.first()).copied() {
+                                if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(fh) {
                                     let mut io = SimpleFsIo { fs: &mut *fs };
-                                    let text = &textarea.text;
-                                    if io.write_file(path, name, text.as_bytes()).is_ok() {
+                                    if io.write_file(path, name, textarea.text.as_bytes()).is_ok() {
                                         settings.last_file = name.clone();
                                         settings.set_last_dir_path(&last_dir);
                                         save_settings(&settings);
@@ -374,6 +456,27 @@ fn main() -> Status {
                             }
                         }
                     }
+                    Key::Character('a') | Key::Character('A') => { textarea.select_all(); }
+                    Key::Character('c') | Key::Character('C') => {
+                        if let Some(sel) = textarea.selected_text() {
+                            clipboard = sel;
+                            status = String::from("Copied.");
+                        }
+                    }
+                    Key::Character('v') | Key::Character('V') => {
+                        if !clipboard.is_empty() {
+                            for c in clipboard.clone().chars() {
+                                textarea.apply_key_event(&KeyEvent::new(Key::Character(c)));
+                            }
+                        }
+                    }
+                    Key::Character('f') | Key::Character('F') => {
+                        find_visible = true;
+                        find_input = LineInput::new();
+                        find_list.clear();
+                        find_current = 0;
+                        status = String::from("Find: type query  Enter=next  Escape=close");
+                    }
                     Key::Character('q') | Key::Character('Q') => {
                         settings.set_last_dir_path(&last_dir);
                         save_settings(&settings);
@@ -388,49 +491,143 @@ fn main() -> Status {
             // ── F10: open File menu ───────────────────────────────────────────
             if ev.key == Key::Function(10) {
                 menu_open = Some(0);
-                menu_sel = 0;
+                menu_sel = FILE_IDX_NEW;
                 dirty = true;
                 continue;
             }
 
             // ── Menu navigation ───────────────────────────────────────────────
-            if let Some(_mi) = menu_open {
+            if let Some(mi) = menu_open {
+                let items = if mi == 0 { FILE_MENU } else { EDIT_MENU };
                 match ev.key {
                     Key::Escape => { menu_open = None; }
-                    Key::Up     => { if menu_sel > 0 { menu_sel -= 1; } }
-                    Key::Down   => { if menu_sel + 1 < FILE_MENU.len() { menu_sel += 1; } }
-                    Key::Enter  => {
-                        match menu_sel {
-                            0 => { // New
-                                textarea = TextArea::from_str("");
-                                current_file = None;
-                                status = String::from("New file.");
-                            }
-                            1 => { // Open
-                                picker_mode = PickerMode::Load;
-                                if let Some(fp) = open_picker(PickerMode::Load, &last_dir) {
-                                    let n = fp.picker.entries.len().max(1);
-                                    fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), 0);
-                                    file_picker = Some(fp);
+                    Key::Left => {
+                        menu_open = Some(mi.saturating_sub(1));
+                        menu_sel = 0;
+                    }
+                    Key::Right => {
+                        menu_open = Some((mi + 1).min(MENU_LABELS.len() - 1));
+                        menu_sel = 0;
+                    }
+                    Key::Up => {
+                        let mut next = menu_sel;
+                        loop {
+                            if next == 0 { break; }
+                            next -= 1;
+                            if items[next] != "--" { break; }
+                        }
+                        // Skip greyed Open Last File
+                        if mi == 0 && next == FILE_IDX_OPEN_LAST && settings.last_file.is_empty() && next > 0 {
+                            next -= 1;
+                        }
+                        menu_sel = next;
+                    }
+                    Key::Down => {
+                        let mut next = menu_sel;
+                        loop {
+                            if next + 1 >= items.len() { break; }
+                            next += 1;
+                            if items[next] != "--" { break; }
+                        }
+                        if mi == 0 && next == FILE_IDX_OPEN_LAST && settings.last_file.is_empty() && next + 1 < items.len() {
+                            next += 1;
+                        }
+                        menu_sel = next;
+                    }
+                    Key::Enter => {
+                        if mi == 0 {
+                            match menu_sel {
+                                FILE_IDX_NEW => {
+                                    textarea = TextArea::from_str("");
+                                    current_file = None;
+                                    status = String::from("New file.");
                                 }
-                            }
-                            2 | 3 => { // Save / Save As
-                                picker_mode = PickerMode::Save;
-                                if let Some(fp) = open_picker(PickerMode::Save, &last_dir) {
-                                    let n = fp.picker.entries.len().max(1);
-                                    fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), 0);
-                                    file_picker = Some(fp);
+                                FILE_IDX_OPEN_LAST => {
+                                    if !settings.last_file.is_empty() {
+                                        if let Some((bytes, dir, name)) = try_load_last_file(&settings) {
+                                            let text = core::str::from_utf8(&bytes).unwrap_or("[binary]");
+                                            textarea = TextArea::from_str(text);
+                                            current_file = Some((dir.clone(), name.clone()));
+                                            last_dir = dir;
+                                            status = format!("Opened: {}", name);
+                                        } else {
+                                            status = String::from("Could not open last file.");
+                                        }
+                                    }
                                 }
+                                FILE_IDX_OPEN => {
+                                    picker_mode = PickerMode::Load;
+                                    if let Some(fp) = open_picker(PickerMode::Load, &last_dir) {
+                                        let n = fp.picker.entries.len().max(1);
+                                        fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), 0);
+                                        file_picker = Some(fp);
+                                    }
+                                }
+                                FILE_IDX_SAVE => {
+                                    if let Some((ref path, ref name)) = current_file.clone() {
+                                        let user = find_user_fs_handles();
+                                        let all  = list_simple_fs_handles();
+                                        if let Some(fh) = user.first().or_else(|| all.first()).copied() {
+                                            if let Ok(mut fs) = open_protocol_exclusive::<SimpleFileSystem>(fh) {
+                                                let mut io = SimpleFsIo { fs: &mut *fs };
+                                                if io.write_file(path, name, textarea.text.as_bytes()).is_ok() {
+                                                    settings.last_file = name.clone();
+                                                    settings.set_last_dir_path(&last_dir);
+                                                    save_settings(&settings);
+                                                    status = format!("Saved: {}", name);
+                                                } else {
+                                                    status = format!("Error saving: {}", name);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        picker_mode = PickerMode::Save;
+                                        if let Some(fp) = open_picker(PickerMode::Save, &last_dir) {
+                                            let n = fp.picker.entries.len().max(1);
+                                            fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), 0);
+                                            file_picker = Some(fp);
+                                        }
+                                    }
+                                }
+                                FILE_IDX_SAVE_AS => {
+                                    picker_mode = PickerMode::Save;
+                                    if let Some(fp) = open_picker(PickerMode::Save, &last_dir) {
+                                        let n = fp.picker.entries.len().max(1);
+                                        fp_sb = ScrollbarState::new(ScrollAxis::Vertical, n, visible_lines.max(1), 0);
+                                        file_picker = Some(fp);
+                                    }
+                                }
+                                FILE_IDX_EXIT => {
+                                    settings.set_last_dir_path(&last_dir);
+                                    save_settings(&settings);
+                                    return Status::SUCCESS;
+                                }
+                                _ => {}
                             }
-                            5 => { // Delete
-                                status = String::from("Delete not yet implemented.");
+                        } else {
+                            match menu_sel {
+                                EDIT_IDX_COPY => {
+                                    if let Some(sel) = textarea.selected_text() {
+                                        clipboard = sel;
+                                        status = String::from("Copied.");
+                                    }
+                                }
+                                EDIT_IDX_PASTE => {
+                                    for c in clipboard.clone().chars() {
+                                        textarea.apply_key_event(&KeyEvent::new(Key::Character(c)));
+                                    }
+                                }
+                                EDIT_IDX_SELECT_ALL => { textarea.select_all(); }
+                                EDIT_IDX_DESELECT   => { textarea.clear_selection(); }
+                                EDIT_IDX_FIND => {
+                                    find_visible = true;
+                                    find_input = LineInput::new();
+                                    find_list.clear();
+                                    find_current = 0;
+                                    status = String::from("Find: type query  Enter=next  Escape=close");
+                                }
+                                _ => {}
                             }
-                            7 => { // Exit
-                                settings.set_last_dir_path(&last_dir);
-                                save_settings(&settings);
-                                return Status::SUCCESS;
-                            }
-                            _ => {}
                         }
                         menu_open = None;
                     }
@@ -443,24 +640,23 @@ fn main() -> Status {
             // ── Editor ───────────────────────────────────────────────────────
             textarea.apply_key_event(&ev);
             let total = textarea.line_count().max(1);
-            sb = ScrollbarState::new(ScrollAxis::Vertical, total, visible_lines.max(1), textarea.scroll_top_line);
+            _sb = ScrollbarState::new(ScrollAxis::Vertical, total, visible_lines.max(1), textarea.scroll_top_line);
             dirty = true;
         }
 
         if !dirty { continue; }
         dirty = false;
 
-        // ── Paint scene ────────────────────────────────────────────────────────
+        // ── Paint ─────────────────────────────────────────────────────────────
         let Some(mut fb) = BgrxFramebuffer::new(&mut back, w as u32, h as u32, stride_bytes)
         else { return Status::DEVICE_ERROR; };
 
-        // Background
         fb.fill_rect_solid(0, 0, w as u32, h as u32, theme.colors.background);
 
         // Title bar
         let title_text = match &current_file {
-            Some((_, n)) => format!("skriver -- {}", n),
-            None => String::from("skriver -- [untitled]"),
+            Some((_, n)) => format!("Lotus OS -- {}", n),
+            None => String::from("Lotus OS -- [untitled]"),
         };
         let _ = draw_window_title_bar(
             &mut fb, title_rect, &title_text, font, true,
@@ -474,31 +670,57 @@ fn main() -> Status {
             theme.colors.surface, theme.colors.text, theme.colors.accent, theme.colors.caption_on_accent,
         );
 
-        // Editor area: sunken border
+        // Editor chrome
         let _ = bevel.draw_sunken(&mut fb, editor_rect);
 
-        // Fill editor background
-        Rectangle::new(inner_rect.top_left, inner_rect.size)
+        // Shrink visible area when find bar is open
+        let edit_inner_h = if find_visible {
+            inner_rect.size.height.saturating_sub(FIND_H as u32 + 2)
+        } else {
+            inner_rect.size.height
+        };
+        let inner_vis = Rectangle::new(inner_rect.top_left, Size::new(inner_rect.size.width, edit_inner_h));
+
+        Rectangle::new(inner_vis.top_left, inner_vis.size)
             .into_styled(PrimitiveStyle::with_fill(theme.colors.canvas))
             .draw(&mut fb)
             .ok();
 
-        // Text lines
-        let lines = textarea.lines();
-        for (li, line) in lines.iter()
+        // Text
+        let vis_lines = (edit_inner_h as i32 / LINE_H).max(0) as usize;
+        for (li, line) in textarea.lines().iter()
             .enumerate()
             .skip(textarea.scroll_top_line)
-            .take(visible_lines)
+            .take(vis_lines)
         {
             let vy = li - textarea.scroll_top_line;
-            let y  = inner_rect.top_left.y + vy as i32 * LINE_H;
-            let x  = inner_rect.top_left.x + 2;
-            let style = MonoTextStyle::new(font, theme.colors.text);
-            let _ = Text::with_baseline(line, Point::new(x, y + 1), style, Baseline::Top).draw(&mut fb);
+            let y  = inner_vis.top_left.y + vy as i32 * LINE_H;
+            let x  = inner_vis.top_left.x + 2;
+            let _ = Text::with_baseline(
+                line,
+                Point::new(x, y + 1),
+                MonoTextStyle::new(font, theme.colors.text),
+                Baseline::Top,
+            ).draw(&mut fb);
         }
 
-        // Scrollbar area
+        // Scrollbar
         let _ = bevel.draw_sunken(&mut fb, sb_rect);
+
+        // Find bar
+        if find_visible {
+            Rectangle::new(find_bar_rect.top_left, find_bar_rect.size)
+                .into_styled(PrimitiveStyle::with_fill(theme.colors.surface))
+                .draw(&mut fb)
+                .ok();
+            let label = format!("Find: {}_", find_input.text);
+            let _ = Text::with_baseline(
+                &label,
+                Point::new(find_bar_rect.top_left.x + 4, find_bar_rect.top_left.y + 5),
+                MonoTextStyle::new(font, theme.colors.text),
+                Baseline::Top,
+            ).draw(&mut fb);
+        }
 
         // Status bar
         Rectangle::new(status_rect.top_left, status_rect.size)
@@ -512,16 +734,28 @@ fn main() -> Status {
             Baseline::Top,
         ).draw(&mut fb);
 
-        // Menu popup
+        // Menu popups
         if let Some(mi) = menu_open {
             if let Some(cell) = menu_cells.get(mi) {
-                let popup = popup_rect_for(cell, FILE_MENU);
-                let _ = draw_menu_popup(
-                    &mut fb, &bevel, popup, FILE_MENU, menu_sel,
-                    LINE_H, font,
-                    theme.colors.canvas, theme.colors.text,
-                    theme.colors.accent, theme.colors.caption_on_accent,
-                );
+                if mi == 0 {
+                    let popup = popup_rect_for(cell, FILE_MENU);
+                    let no_last = settings.last_file.is_empty();
+                    let disabled = [false, no_last, false, false, false, false, false];
+                    let _ = draw_menu_popup_ex(
+                        &mut fb, &bevel, popup, FILE_MENU, &disabled, menu_sel,
+                        LINE_H, font,
+                        theme.colors.canvas, theme.colors.text,
+                        theme.colors.accent, theme.colors.caption_on_accent,
+                    );
+                } else {
+                    let popup = popup_rect_for(cell, EDIT_MENU);
+                    let _ = draw_menu_popup(
+                        &mut fb, &bevel, popup, EDIT_MENU, menu_sel,
+                        LINE_H, font,
+                        theme.colors.canvas, theme.colors.text,
+                        theme.colors.accent, theme.colors.caption_on_accent,
+                    );
+                }
             }
         }
 
@@ -545,7 +779,7 @@ fn main() -> Status {
             );
         }
 
-        // ── Blit back buffer to GOP framebuffer ───────────────────────────────
+        // Blit to GOP
         drop(fb);
         {
             let mut fb_mem = gop.frame_buffer();
