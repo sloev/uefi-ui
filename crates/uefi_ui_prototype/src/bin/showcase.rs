@@ -800,7 +800,7 @@ fn ed_draw_file_menu_popup(d: &mut Disp, bevel: &BedrockBevel, theme: &Theme, se
         "Save\tCtrl+S",
         "Save As...",
         "—",
-        "Exit\tCtrl+Q",
+        "Quit\tq",
     ];
     // "Open Last File" is greyed (index 1) — no last file in this screenshot
     let disabled = &[false, true, false, false, false, false, false];

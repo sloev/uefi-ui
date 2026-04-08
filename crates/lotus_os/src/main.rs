@@ -8,7 +8,7 @@
 //!   Esc (in editor)  → enter menu mode
 //!   Esc (in menu)    → exit back to editor
 //!   In menu mode:    f=File menu  e=Edit menu  n=New  o=Open  s=Save  q=Quit
-//!   In File menu:    n=New  l=Open Last  o=Open  s=Save  a=Save As  x=Exit
+//!   In File menu:    n=New  l=Open Last  o=Open  s=Save  a=Save As  q=Quit
 //!   In Edit menu:    c=Copy  v=Paste  a=Select All  d=Deselect  f=Find
 //!   In Find bar:     type query  Enter=next match  Esc=close
 #![no_main]
@@ -69,14 +69,14 @@ const FILE_MENU: &[&str] = &[
     "&Save",
     "S&ave As...",
     "--",
-    "E&xit",
+    "&Quit",
 ];
 const FILE_IDX_NEW:       usize = 0;
 const FILE_IDX_OPEN_LAST: usize = 1;
 const FILE_IDX_OPEN:      usize = 2;
 const FILE_IDX_SAVE:      usize = 3;
 const FILE_IDX_SAVE_AS:   usize = 4;
-const FILE_IDX_EXIT:      usize = 6;
+const FILE_IDX_QUIT:      usize = 6;
 
 // Edit menu
 const EDIT_MENU: &[&str] = &[
@@ -209,7 +209,7 @@ fn mode_hint(mode: Mode) -> &'static str {
     match mode {
         Mode::Editing  => "Esc: menu",
         Mode::MenuBar  => "f: File  e: Edit  n: New  o: Open  s: Save  q: Quit  Esc: back",
-        Mode::FileMenu => "n: New  l: Open Last  o: Open  s: Save  a: Save As  x: Exit  Esc: back",
+        Mode::FileMenu => "n: New  l: Open Last  o: Open  s: Save  a: Save As  q: Quit  Esc: back",
         Mode::EditMenu => "c: Copy  v: Paste  a: Select All  d: Deselect  f: Find  Esc: back",
         Mode::Find     => "type query  Enter: next match  Esc: close",
         Mode::FilePicker => "arrows: navigate  Enter: confirm  Esc: cancel",
@@ -548,7 +548,7 @@ fn main() -> Status {
                         'o' => Some(FILE_IDX_OPEN),
                         's' => Some(FILE_IDX_SAVE),
                         'a' => Some(FILE_IDX_SAVE_AS),
-                        'x' | 'q' => Some(FILE_IDX_EXIT),
+                        'q' => Some(FILE_IDX_QUIT),
                         _ => None,
                     };
                 }
@@ -629,7 +629,7 @@ fn main() -> Status {
                                 None => { mode = Mode::Editing; status = String::from("No accessible volume.  Esc: menu"); }
                             }
                         }
-                        FILE_IDX_EXIT => {
+                        FILE_IDX_QUIT => {
                             settings.set_last_dir_path(&last_dir);
                             save_settings(&settings);
                             return Status::SUCCESS;
