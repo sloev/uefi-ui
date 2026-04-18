@@ -5,14 +5,16 @@
 # For `make iso`: xorriso, mtools, dosfstools (e.g. apt install xorriso mtools dosfstools).
 #
 # Targets:
-#   make sim      — interactive SDL2 window (small Win95-style prototype layout)
-#   make linux    — SDL2: full demo (same paint path as uefi_ui_demo / QEMU firmware)
-#   make png      — headless PNG export (no SDL2)
-#   make qemu     — build UEFI app + run in QEMU with OVMF
-#   make iso      — FAT ESP + bootable ISO under target/ (USB / VM)
-#   make virtualbox — build ISO + create/start a VirtualBox VM (EFI, USB, tablet mouse)
+#   make sim            — interactive SDL2 window (small Win95-style prototype layout)
+#   make linux          — SDL2: full demo (same paint path as uefi_ui_demo / QEMU firmware)
+#   make png            — headless PNG export (no SDL2)
+#   make qemu           — build UEFI app + run in QEMU with OVMF
+#   make iso            — FAT ESP + bootable ISO under target/ (USB / VM)
+#   make iso-lotus      — bootable Lotus OS ISO for UEFI
+#   make virtualbox     — build uefi_ui_demo ISO + create/start a VirtualBox VM
+#   make virtualbox-lotus — build Lotus OS ISO + create/start a VirtualBox VM
 
-.PHONY: help deps sim linux png qemu build-uefi iso virtualbox
+.PHONY: help deps sim linux png qemu build-uefi iso iso-lotus virtualbox virtualbox-lotus
 
 CARGO ?= cargo
 RUSTUP ?= rustup
@@ -107,24 +109,8 @@ build-lotus:
 	$(RUSTUP) target add $(UEFI_TARGET)
 	$(CARGO) build -p lotus-os --target $(UEFI_TARGET) --release
 
-iso-lotus: build-lotus
-	@rel="$(CURDIR)/target/$(UEFI_TARGET)/release"; \
-	efi="$$rel/lotus-os.efi"; \
-	if [ ! -f "$$efi" ]; then efi="$$rel/lotus-os"; fi; \
-	if [ ! -f "$$efi" ]; then echo "Missing lotus-os binary at $$efi"; exit 1; fi; \
-	esp_img="$(CURDIR)/target/lotus_os_esp.img"; \
-	iso_out="$(CURDIR)/target/lotus-os.iso"; \
-	stage="$(CURDIR)/target/lotus_os_iso_stage"; \
-	rm -rf "$$stage" && mkdir -p "$$stage"; \
-	rm -f "$$esp_img"; \
-	dd if=/dev/zero of="$$esp_img" bs=1M count=16 status=none; \
-	mkfs.vfat "$$esp_img"; \
-	MTOOLS_SKIP_CHECK=1 mmd -i "$$esp_img" ::/EFI 2>/dev/null || true; \
-	MTOOLS_SKIP_CHECK=1 mmd -i "$$esp_img" ::/EFI/BOOT 2>/dev/null || true; \
-	MTOOLS_SKIP_CHECK=1 mcopy -i "$$esp_img" -o "$$efi" ::/EFI/BOOT/BOOTX64.EFI; \
-	cp "$$esp_img" "$$stage/esp_uefi.img"; \
-	(cd "$$stage" && xorriso -as mkisofs -o "$$iso_out" -V LOTUS_OS -e esp_uefi.img -no-emul-boot .); \
-	echo "Wrote $$iso_out"
+iso-lotus:
+	bash "$(CURDIR)/scripts/build-lotus-iso.sh"
 
 iso:
 	bash "$(CURDIR)/scripts/build-efi-iso.sh"
@@ -140,3 +126,13 @@ linux:
 
 png:
 	$(CARGO) run -p uefi_ui_prototype --release
+
+virtualbox-lotus: iso-lotus
+	@echo "Starting VirtualBox VM with Lotus OS ISO..."
+	VBoxManage createvm --name "LotusOS" --ostype "Other" --register 2>/dev/null || true
+	VBoxManage modifyvm "LotusOS" --firmware efi --memory 256 --cpus 1 2>/dev/null || true
+	VBoxManage modifyvm "LotusOS" --mouse usbtablet 2>/dev/null || true
+	VBoxManage storagectl "LotusOS" --name "IDE Controller" --add ide --bootable on 2>/dev/null || true
+	VBoxManage storageattach "LotusOS" --storagectl "IDE Controller" --port 0 --device 0 --type dvddrive --medium "$(CURDIR)/target/lotus-os.iso" 2>/dev/null || true
+	VBoxManage startvm "LotusOS" --type gui 2>/dev/null || echo "VirtualBox may not be installed or VM already exists"
+	echo "If VirtualBox doesn't open automatically, manually create a VM with EFI firmware and attach $(CURDIR)/target/lotus-os.iso"

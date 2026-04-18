@@ -474,6 +474,7 @@ dependencies = [
  "fontdue",
  "minipng",
  "uefi",
+ "uefi-raw",
 ]
 
 [[package]]

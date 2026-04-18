@@ -9,7 +9,7 @@ readme = "../../docs/README.md"
 [features]
 default = []
 # UEFI protocol glue (GOP framebuffer, Simple FS listing). Library stays no_std + alloc.
-uefi = ["dep:uefi"]
+uefi = ["dep:uefi", "dep:uefi-raw"]
 
 [dependencies]
 embedded-graphics = { version = "0.8", default-features = false }
@@ -18,3 +18,4 @@ fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] 
 minipng = { version = "0.1", default-features = true }
 
 uefi = { version = "0.37", optional = true, default-features = false, features = ["alloc"] }
+uefi-raw = { version = "0.14", optional = true, default-features = false }

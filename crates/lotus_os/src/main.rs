@@ -31,9 +31,11 @@ use uefi::CString16;
 
 use uefi_ui::bedrock::BedrockBevel;
 use uefi_ui::bedrock_controls::{
-    compute_file_picker_layout, draw_file_picker, draw_menu_bar, draw_menu_popup,
-    draw_menu_popup_ex, draw_window_title_bar, FP_SB_W,
+    compute_file_picker_layout, compute_keyboard_layout_picker_layout, draw_file_picker,
+    draw_keyboard_layout_picker, draw_menu_bar, draw_menu_popup, draw_menu_popup_ex,
+    draw_window_title_bar, FP_SB_W, KBD_SB_W,
 };
+use uefi_ui::popover;
 use uefi_ui::editor_settings::EditorSettings;
 use uefi_ui::embedded_graphics::mono_font::ascii::FONT_6X10;
 use uefi_ui::embedded_graphics::mono_font::MonoTextStyle;
@@ -44,6 +46,7 @@ use uefi_ui::embedded_graphics::geometry::{Point, Size};
 use uefi_ui::file_picker::{FileIo, FilePickerDialogAction, FilePickerDialogState, LineInput, PickerMode};
 use uefi_ui::framebuffer::BgrxFramebuffer;
 use uefi_ui::input::{Key, KeyEvent, Modifiers};
+use uefi_ui::keyboard_layout::{list_keyboard_layouts, load_active_keyboard_layout, set_active_keyboard_layout, KeyboardLayoutPickerState};
 use uefi_ui::theme::Theme;
 use uefi_ui::uefi_vars::{load_settings_blob, save_settings_blob};
 use uefi_ui::{find_user_fs_handles, list_simple_fs_handles, SimpleFsIo};
@@ -59,7 +62,7 @@ const FIND_H:  i32 = 20;
 
 // ── Menu definitions ──────────────────────────────────────────────────────────
 // Shown in the menu bar
-const MENU_LABELS: &[&str] = &["&File", "&Edit"];
+const MENU_LABELS: &[&str] = &["&File", "&Edit", "Se&ttings"];
 
 // File menu — mnemonic letters match single-key shortcuts when dropdown is open
 const FILE_MENU: &[&str] = &[
@@ -93,15 +96,23 @@ const EDIT_IDX_SELECT_ALL: usize = 2;
 const EDIT_IDX_DESELECT:   usize = 3;
 const EDIT_IDX_FIND:       usize = 5;
 
+// Settings menu
+const SETTINGS_MENU: &[&str] = &[
+    "&Keyboard Layout",
+];
+const SETTINGS_IDX_KEYBOARD_LAYOUT: usize = 0;
+
 // ── App mode ──────────────────────────────────────────────────────────────────
 #[derive(PartialEq, Clone, Copy)]
 enum Mode {
     Editing,
-    MenuBar,    // menu bar focused, no dropdown
-    FileMenu,   // File dropdown open
-    EditMenu,   // Edit dropdown open
+    MenuBar,       // menu bar focused, no dropdown
+    FileMenu,      // File dropdown open
+    EditMenu,      // Edit dropdown open
+    SettingsMenu,  // Settings dropdown open
     Find,
     FilePicker,
+    KeyboardLayout, // Keyboard layout picker modal
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -208,11 +219,13 @@ fn find_in(text: &str, query: &str) -> Vec<(usize, usize)> {
 fn mode_hint(mode: Mode) -> &'static str {
     match mode {
         Mode::Editing  => "Esc: menu",
-        Mode::MenuBar  => "f: File  e: Edit  n: New  o: Open  s: Save  q: Quit  Esc: back",
+        Mode::MenuBar  => "f: File  e: Edit  t: Settings  n: New  o: Open  s: Save  q: Quit  Esc: back",
         Mode::FileMenu => "n: New  l: Open Last  o: Open  s: Save  a: Save As  q: Quit  Esc: back",
         Mode::EditMenu => "c: Copy  v: Paste  a: Select All  d: Deselect  f: Find  Esc: back",
+        Mode::SettingsMenu => "k: Keyboard Layout  Esc: back",
         Mode::Find     => "type query  Enter: next match  Esc: close",
         Mode::FilePicker => "arrows: navigate  Enter: confirm  Esc: cancel",
+        Mode::KeyboardLayout => "Tab: cycle focus  arrows: navigate list  Enter/Space: activate  Esc: cancel",
     }
 }
 
@@ -296,6 +309,11 @@ fn main() -> Status {
         last_dir = dir;
     }
 
+    // Auto-load saved keyboard layout on boot
+    if let Ok(Some(guid)) = load_active_keyboard_layout() {
+        let _ = set_active_keyboard_layout(&guid);
+    }
+
     let mut clipboard:   String = String::new();
     let mut mode:        Mode   = Mode::Editing;
     let mut menu_sel:    usize  = 0;  // selected item within open dropdown
@@ -309,6 +327,9 @@ fn main() -> Status {
     // File picker
     let mut file_picker: Option<FilePickerDialogState> = None;
     let mut fp_sb = ScrollbarState::new(ScrollAxis::Vertical, 1, 1, 0);
+
+    // Keyboard layout picker
+    let mut kbd_layout_picker: Option<KeyboardLayoutPickerState> = None;
 
     let mut status: String = String::from(mode_hint(Mode::Editing));
 
@@ -450,9 +471,12 @@ fn main() -> Status {
                         if menu_focus == 0 {
                             mode = Mode::FileMenu;
                             menu_sel = FILE_IDX_NEW;
-                        } else {
+                        } else if menu_focus == 1 {
                             mode = Mode::EditMenu;
                             menu_sel = EDIT_IDX_COPY;
+                        } else if menu_focus == 2 {
+                            mode = Mode::SettingsMenu;
+                            menu_sel = SETTINGS_IDX_KEYBOARD_LAYOUT;
                         }
                         status = String::from(mode_hint(mode));
                     }
@@ -462,6 +486,7 @@ fn main() -> Status {
                     match c {
                         'f' => { mode = Mode::FileMenu; menu_sel = FILE_IDX_NEW; status = String::from(mode_hint(Mode::FileMenu)); }
                         'e' => { mode = Mode::EditMenu; menu_sel = EDIT_IDX_COPY; status = String::from(mode_hint(Mode::EditMenu)); }
+                        't' => { mode = Mode::SettingsMenu; menu_sel = SETTINGS_IDX_KEYBOARD_LAYOUT; status = String::from(mode_hint(Mode::SettingsMenu)); }
                         'n' => { do_new(&mut textarea, &mut current_file); mode = Mode::Editing; status = String::from("New file.  Esc: menu"); }
                         'o' => {
                             picker_mode = PickerMode::Load;
@@ -724,6 +749,171 @@ fn main() -> Status {
                 continue;
             }
 
+            // ── Settings menu dropdown ────────────────────────────────────────
+            if mode == Mode::SettingsMenu {
+                let ch = match ev.key { Key::Character(c) => Some(c.to_ascii_lowercase()), _ => None };
+                let mut action: Option<usize> = None;
+
+                match ev.key {
+                    Key::Escape => { mode = Mode::MenuBar; menu_focus = 2; status = String::from(mode_hint(Mode::MenuBar)); }
+                    Key::Up => {
+                        let mut next = menu_sel;
+                        loop {
+                            if next == 0 { break; }
+                            next -= 1;
+                            if SETTINGS_MENU[next] != "--" { break; }
+                        }
+                        menu_sel = next;
+                        status = String::from(mode_hint(Mode::SettingsMenu));
+                    }
+                    Key::Down => {
+                        let mut next = menu_sel;
+                        loop {
+                            if next + 1 >= SETTINGS_MENU.len() { break; }
+                            next += 1;
+                            if SETTINGS_MENU[next] != "--" { break; }
+                        }
+                        menu_sel = next;
+                        status = String::from(mode_hint(Mode::SettingsMenu));
+                    }
+                    Key::Enter => { action = Some(menu_sel); }
+                    _ => {}
+                }
+                if let Some(c) = ch {
+                    action = match c {
+                        'k' => Some(SETTINGS_IDX_KEYBOARD_LAYOUT),
+                        _ => None,
+                    };
+                }
+
+                if let Some(idx) = action {
+                    match idx {
+                        SETTINGS_IDX_KEYBOARD_LAYOUT => {
+                            // Open keyboard layout picker
+                            match list_keyboard_layouts() {
+                                Ok(layouts) => {
+                                    let mut picker = KeyboardLayoutPickerState::new(layouts);
+                                    // Find and select the currently active layout
+                                    if let Ok(Some(active_guid)) = load_active_keyboard_layout() {
+                                        if let Some(idx) = picker.layouts.iter().position(|l| l.guid == active_guid) {
+                                            picker.selected = idx;
+                                            picker.scroll_top = idx.saturating_sub(2);
+                                        }
+                                    }
+                                    kbd_layout_picker = Some(picker);
+                                    mode = Mode::KeyboardLayout;
+                                    status = String::from(mode_hint(Mode::KeyboardLayout));
+                                }
+                                Err(e) => {
+                                    status = format!("Error listing keyboard layouts: {:?}.  Esc: menu", e);
+                                    mode = Mode::Editing;
+                                }
+                            }
+                        }
+                        _ => { mode = Mode::MenuBar; status = String::from(mode_hint(Mode::MenuBar)); }
+                    }
+                }
+                dirty = true;
+                continue;
+            }
+
+            // ── Keyboard Layout picker modal ───────────────────────────────────
+            if mode == Mode::KeyboardLayout {
+                let mut picker = kbd_layout_picker.take().unwrap();
+                let shift = ev.modifiers.shift;
+                
+                match ev.key {
+                    Key::Escape => {
+                        mode = Mode::Editing;
+                        status = String::from(mode_hint(Mode::Editing));
+                    }
+                    Key::Tab => {
+                        // Cycle focus through: List -> OK -> Cancel -> List
+                        picker.focus = if shift {
+                            picker.focus.prev()
+                        } else {
+                            picker.focus.next()
+                        };
+                    }
+                    Key::Enter => {
+                        match picker.focus {
+                            uefi_ui::keyboard_layout::KeyboardLayoutPickerFocus::List => {
+                                // Enter on list: select current layout
+                                if let Some(layout) = picker.selected_layout() {
+                                    if let Err(e) = set_active_keyboard_layout(&layout.guid) {
+                                        status = format!("Failed to set layout: {:?}.  Esc: menu", e);
+                                    } else {
+                                        status = format!("Keyboard layout set to: {}.  Esc: menu", layout.descriptor);
+                                    }
+                                    mode = Mode::Editing;
+                                }
+                            }
+                            uefi_ui::keyboard_layout::KeyboardLayoutPickerFocus::OkButton => {
+                                // Enter on OK: confirm current selection
+                                if let Some(layout) = picker.selected_layout() {
+                                    if let Err(e) = set_active_keyboard_layout(&layout.guid) {
+                                        status = format!("Failed to set layout: {:?}.  Esc: menu", e);
+                                    } else {
+                                        status = format!("Keyboard layout set to: {}.  Esc: menu", layout.descriptor);
+                                    }
+                                }
+                                mode = Mode::Editing;
+                            }
+                            uefi_ui::keyboard_layout::KeyboardLayoutPickerFocus::CancelButton => {
+                                // Enter on Cancel: close dialog
+                                mode = Mode::Editing;
+                                status = String::from(mode_hint(Mode::Editing));
+                            }
+                        }
+                    }
+                    Key::Character(' ') => {
+                        // Space also activates buttons
+                        match picker.focus {
+                            uefi_ui::keyboard_layout::KeyboardLayoutPickerFocus::OkButton => {
+                                if let Some(layout) = picker.selected_layout() {
+                                    if let Err(e) = set_active_keyboard_layout(&layout.guid) {
+                                        status = format!("Failed to set layout: {:?}.  Esc: menu", e);
+                                    } else {
+                                        status = format!("Keyboard layout set to: {}.  Esc: menu", layout.descriptor);
+                                    }
+                                }
+                                mode = Mode::Editing;
+                            }
+                            uefi_ui::keyboard_layout::KeyboardLayoutPickerFocus::CancelButton => {
+                                mode = Mode::Editing;
+                                status = String::from(mode_hint(Mode::Editing));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Key::Up => {
+                        if picker.list_focused() {
+                            if picker.selected > 0 {
+                                picker.selected -= 1;
+                                if picker.scroll_top > picker.selected {
+                                    picker.scroll_top = picker.selected;
+                                }
+                            }
+                        }
+                    }
+                    Key::Down => {
+                        if picker.list_focused() {
+                            if picker.selected + 1 < picker.layouts.len() {
+                                picker.selected += 1;
+                                // Scroll down if selection goes past visible rows
+                                if picker.scroll_top + 5 <= picker.selected {
+                                    picker.scroll_top = picker.selected.saturating_sub(4);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                kbd_layout_picker = Some(picker);
+                dirty = true;
+                continue;
+            }
+
             // ── Editing mode ──────────────────────────────────────────────────
             // Esc enters menu mode; everything else goes to the textarea
             if ev.key == Key::Escape {
@@ -762,6 +952,7 @@ fn main() -> Status {
             Mode::MenuBar  => None,           // bar is focused but no dropdown yet
             Mode::FileMenu => Some(0usize),
             Mode::EditMenu => Some(1usize),
+            Mode::SettingsMenu => Some(2usize),
             _ => None,
         };
         // Highlight the focused tab in menu bar when in MenuBar mode
@@ -858,6 +1049,43 @@ fn main() -> Status {
                     theme.colors.accent, theme.colors.caption_on_accent,
                 );
             }
+        }
+        if mode == Mode::SettingsMenu {
+            if let Some(cell) = menu_cells.get(2) {
+                let popup = popup_rect_for(cell, SETTINGS_MENU);
+                let _ = draw_menu_popup(
+                    &mut fb, &bevel, popup, SETTINGS_MENU, menu_sel,
+                    LINE_H, font,
+                    theme.colors.canvas, theme.colors.text,
+                    theme.colors.accent, theme.colors.caption_on_accent,
+                );
+            }
+        }
+
+        // Keyboard layout picker overlay
+        if let Some(ref picker) = kbd_layout_picker {
+            let dw = (w as u32 * 2 / 5).min(400).max(300);
+            let dh = (h as u32 * 2 / 5).min(250).max(200);
+            let screen_rect = Rectangle::new(Point::new(0, 0), Size::new(w as u32, h as u32));
+            let dlg = popover::center_in_screen(Size::new(dw, dh), screen_rect);
+            let layout_kbd = compute_keyboard_layout_picker_layout(dlg, LINE_H, KBD_SB_W);
+            
+            // Compute scrollbar from picker state
+            let sb = ScrollbarState::new(
+                ScrollAxis::Vertical,
+                picker.layouts.len().max(1),
+                layout_kbd.visible_rows.max(1),
+                picker.scroll_top,
+            );
+            
+            let _ = draw_keyboard_layout_picker(
+                &mut fb, &bevel, &layout_kbd,
+                picker,
+                &sb,
+                &theme.colors,
+                font,
+                LINE_H,
+            );
         }
 
         // File picker overlay

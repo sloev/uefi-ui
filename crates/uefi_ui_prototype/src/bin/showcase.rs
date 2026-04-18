@@ -5,7 +5,7 @@
 use std::fs;
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{ascii::FONT_6X10, MonoFont, MonoTextStyle},
     pixelcolor::Rgb888,
     prelude::*,
     primitives::{Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
@@ -13,11 +13,13 @@ use embedded_graphics::{
 };
 use embedded_graphics_simulator::{OutputSettingsBuilder, SimulatorDisplay};
 
+use uefi_ui::popover::center_in_screen;
 use uefi_ui::{
     bedrock::BedrockBevel,
     bedrock_controls::{
-        compute_file_picker_layout, draw_checkbox_classic, draw_combobox_chrome,
-        draw_dropdown_glyph, draw_file_picker, draw_hatched_background, draw_listbox_row,
+        compute_file_picker_layout, draw_checkbox_classic,
+        draw_combobox_chrome, draw_dropdown_glyph, draw_file_picker,
+        draw_hatched_background, draw_listbox_row,
         draw_progress_bar, draw_radio_row, draw_raised_pressed, draw_scrollbar_arrow,
         draw_scrollbar_vertical, draw_separator_h, draw_separator_v, draw_slider_track_thumb,
         draw_status_border, draw_sunken_field, draw_tab_strip, draw_title_button,
@@ -30,6 +32,256 @@ use uefi_ui::{
         ScrollAxis, ScrollbarState, Slider, TreeNode, TreeViewState,
     },
 };
+
+/// Mock types for keyboard layout picker screenshot (keyboard_layout module requires uefi feature)
+#[derive(Debug, Clone)]
+struct MockKeyboardLayout {
+    descriptor: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MockKeyboardLayoutPickerFocus {
+    List,
+    OkButton,
+    CancelButton,
+}
+
+#[derive(Debug, Clone)]
+struct MockKeyboardLayoutPickerState {
+    layouts: Vec<MockKeyboardLayout>,
+    selected: usize,
+    scroll_top: usize,
+    focus: MockKeyboardLayoutPickerFocus,
+}
+
+impl MockKeyboardLayoutPickerState {
+    fn new(layouts: Vec<MockKeyboardLayout>) -> Self {
+        Self {
+            layouts,
+            selected: 0,
+            scroll_top: 0,
+            focus: MockKeyboardLayoutPickerFocus::List,
+        }
+    }
+    
+    fn list_focused(&self) -> bool {
+        matches!(self.focus, MockKeyboardLayoutPickerFocus::List)
+    }
+    
+    fn ok_focused(&self) -> bool {
+        matches!(self.focus, MockKeyboardLayoutPickerFocus::OkButton)
+    }
+    
+    fn cancel_focused(&self) -> bool {
+        matches!(self.focus, MockKeyboardLayoutPickerFocus::CancelButton)
+    }
+}
+
+/// Mock layout for keyboard layout picker
+#[derive(Debug, Clone, Copy)]
+struct MockKeyboardLayoutPickerLayout {
+    pub dialog: Rectangle,
+    pub title_bar: Rectangle,
+    pub close_btn: Rectangle,
+    pub list_outer: Rectangle,
+    pub list_inner: Rectangle,
+    pub sb_rect: Rectangle,
+    pub ok_btn: Rectangle,
+    pub cancel_btn: Rectangle,
+    pub visible_rows: usize,
+}
+
+/// Mock draw function for keyboard layout picker
+fn draw_keyboard_layout_picker_mock<D: DrawTarget<Color = Rgb888>>(
+    target: &mut D,
+    bevel: &BedrockBevel,
+    layout: &MockKeyboardLayoutPickerLayout,
+    state: &MockKeyboardLayoutPickerState,
+    colors: &uefi_ui::theme::ThemeColors,
+    font: &MonoFont<'_>,
+    line_h: i32,
+) -> Result<(), D::Error> {
+    use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
+    use embedded_graphics::text::{Baseline, Text};
+
+    let font_h = font.character_size.height as i32;
+
+    // Dialog chrome
+    bevel.draw_raised_soft(target, layout.dialog)?;
+
+    // Title bar
+    Rectangle::new(layout.title_bar.top_left, layout.title_bar.size)
+        .into_styled(PrimitiveStyle::with_fill(colors.accent))
+        .draw(target)?;
+    Text::with_baseline(
+        "Keyboard Layout",
+        Point::new(layout.title_bar.top_left.x + 8, layout.title_bar.top_left.y + 7),
+        MonoTextStyle::new(font, colors.caption_on_accent),
+        Baseline::Top,
+    ).draw(target)?;
+
+    // Close button (X)
+    {
+        let cx = layout.close_btn.top_left.x + layout.close_btn.size.width as i32 / 2;
+        let cy = layout.close_btn.top_left.y + layout.close_btn.size.height as i32 / 2;
+        let ink = Rgb888::new(0x0a, 0x0a, 0x0a);
+        Line::new(Point::new(cx - 3, cy - 3), Point::new(cx + 3, cy + 3))
+            .into_styled(PrimitiveStyle::with_stroke(ink, 2)).draw(target)?;
+        Line::new(Point::new(cx + 3, cy - 3), Point::new(cx - 3, cy + 3))
+            .into_styled(PrimitiveStyle::with_stroke(ink, 2)).draw(target)?;
+    }
+
+    // Layout list
+    if state.list_focused() {
+        Rectangle::new(layout.list_outer.top_left, layout.list_outer.size)
+            .into_styled(PrimitiveStyle::with_stroke(colors.text, 1))
+            .draw(target)?;
+    }
+    uefi_ui::bedrock_controls::draw_sunken_field(target, bevel, layout.list_outer, colors.canvas)?;
+
+    // Draw list items
+    for (row_offset, kbd_layout) in state.layouts.iter().skip(state.scroll_top).take(layout.visible_rows).enumerate() {
+        let row_y = layout.list_inner.top_left.y + row_offset as i32 * line_h;
+        let row_idx = state.scroll_top + row_offset;
+        let sel = row_idx == state.selected;
+        let bg = if sel { colors.selection_bg } else { colors.canvas };
+        let fg = if sel { colors.caption_on_accent } else { colors.text };
+
+        // Row background
+        Rectangle::new(
+            Point::new(layout.list_inner.top_left.x, row_y),
+            Size::new(layout.list_inner.size.width, line_h as u32),
+        ).into_styled(PrimitiveStyle::with_fill(bg)).draw(target)?;
+
+        // Layout descriptor text
+        let text_y = row_y + (line_h - font_h) / 2;
+        Text::with_baseline(
+            &kbd_layout.descriptor,
+            Point::new(layout.list_inner.top_left.x + 4, text_y),
+            MonoTextStyle::new(font, fg),
+            Baseline::Top,
+        ).draw(target)?;
+    }
+
+    // Scrollbar
+    uefi_ui::bedrock_controls::draw_scrollbar_vertical(
+        target, bevel, layout.sb_rect,
+        Some(0.5),  // mock thumb center
+        Some(0.3),  // mock thumb length
+        false, false,
+    )?;
+
+    // OK button - draw sunken if focused
+    if state.ok_focused() {
+        bevel.draw_sunken(target, layout.ok_btn)?;
+        Text::with_baseline(
+            "OK",
+            Point::new(
+                layout.ok_btn.top_left.x + layout.ok_btn.size.width as i32 / 2 - 12,
+                layout.ok_btn.top_left.y + layout.ok_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.caption_on_accent),
+            Baseline::Top,
+        ).draw(target)?;
+    } else {
+        bevel.draw_raised(target, layout.ok_btn)?;
+        Text::with_baseline(
+            "OK",
+            Point::new(
+                layout.ok_btn.top_left.x + layout.ok_btn.size.width as i32 / 2 - 12,
+                layout.ok_btn.top_left.y + layout.ok_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.text),
+            Baseline::Top,
+        ).draw(target)?;
+    }
+
+    // Cancel button - draw sunken if focused
+    if state.cancel_focused() {
+        bevel.draw_sunken(target, layout.cancel_btn)?;
+        Text::with_baseline(
+            "Cancel",
+            Point::new(
+                layout.cancel_btn.top_left.x + layout.cancel_btn.size.width as i32 / 2 - 20,
+                layout.cancel_btn.top_left.y + layout.cancel_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.caption_on_accent),
+            Baseline::Top,
+        ).draw(target)?;
+    } else {
+        bevel.draw_raised(target, layout.cancel_btn)?;
+        Text::with_baseline(
+            "Cancel",
+            Point::new(
+                layout.cancel_btn.top_left.x + layout.cancel_btn.size.width as i32 / 2 - 20,
+                layout.cancel_btn.top_left.y + layout.cancel_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.text),
+            Baseline::Top,
+        ).draw(target)?;
+    }
+
+    Ok(())
+}
+
+/// Mock layout computation for keyboard layout picker
+fn compute_keyboard_layout_picker_layout_mock(dialog: Rectangle, line_h: i32) -> MockKeyboardLayoutPickerLayout {
+    let x = dialog.top_left.x;
+    let y = dialog.top_left.y;
+    let dw = dialog.size.width;
+    let dh = dialog.size.height;
+    let bevel_px = BedrockBevel::BEVEL_PX as i32; // 3
+    let inner_pad = bevel_px + 5; // 8px inner margin
+
+    let title_bar = Rectangle::new(Point::new(x, y), Size::new(dw, 26));
+    // Close button: 22x20
+    let close_btn = Rectangle::new(
+        Point::new(x + dw as i32 - 3 - 22, y + (26 as i32 - 20) / 2),
+        Size::new(22, 20),
+    );
+
+    // List area
+    let list_top = y + 26 + inner_pad;
+    let btn_y = y + dh as i32 - 38 + (38 - 22) / 2;
+    let list_h = (btn_y - list_top).max(0) as u32;
+    let list_outer = Rectangle::new(
+        Point::new(x + inner_pad, list_top),
+        Size::new(dw - inner_pad as u32 * 2, list_h),
+    );
+    let list_inner = pad(list_outer, BedrockBevel::BEVEL_PX);
+    let sb_rect = Rectangle::new(
+        Point::new(
+            list_outer.top_left.x + list_outer.size.width as i32 - 26 as i32,
+            list_outer.top_left.y,
+        ),
+        Size::new(26, list_h),
+    );
+
+    // Buttons - right-aligned
+    let cancel_btn = Rectangle::new(
+        Point::new(x + dw as i32 - inner_pad - 80, btn_y),
+        Size::new(80, 22),
+    );
+    let ok_btn = Rectangle::new(
+        Point::new(cancel_btn.top_left.x - 80 - 8, btn_y),
+        Size::new(80, 22),
+    );
+
+    let visible_rows = (list_h as i32 / line_h.max(1)) as usize;
+
+    MockKeyboardLayoutPickerLayout {
+        dialog,
+        title_bar,
+        close_btn,
+        list_outer,
+        list_inner,
+        sb_rect,
+        ok_btn,
+        cancel_btn,
+        visible_rows,
+    }
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -637,6 +889,43 @@ fn render_tree_view(out: &str, theme: &Theme, bevel: &BedrockBevel) {
     save(&d, out);
 }
 
+/// Render the keyboard layout picker dialog with mock data.
+fn render_keyboard_layout_picker(out: &str, theme: &Theme, bevel: &BedrockBevel) {
+    // Create sample keyboard layouts
+    let layouts = vec![
+        MockKeyboardLayout { descriptor: String::from("US English") },
+        MockKeyboardLayout { descriptor: String::from("Danish") },
+        MockKeyboardLayout { descriptor: String::from("German") },
+        MockKeyboardLayout { descriptor: String::from("French") },
+        MockKeyboardLayout { descriptor: String::from("Spanish") },
+    ];
+
+    // Dialog dimensions matching the real one
+    let dw = 400u32;
+    let dh = 230u32;
+    let line_h = FONT_6X10.character_size.height as i32 + 6;
+    
+    let mut d = canvas(dw, dh, theme.colors.background);
+    let screen_rect = Rectangle::new(Point::new(0, 0), Size::new(dw, dh));
+    let dlg = center_in_screen(Size::new(dw, dh), screen_rect);
+    
+    let layout = compute_keyboard_layout_picker_layout_mock(dlg, line_h);
+    let state = MockKeyboardLayoutPickerState::new(layouts);
+
+    draw_keyboard_layout_picker_mock(
+        &mut d,
+        bevel,
+        &layout,
+        &state,
+        &theme.colors,
+        &FONT_6X10,
+        line_h,
+    )
+    .ok();
+
+    save(&d, out);
+}
+
 // (draw_groupbox_border and draw_status_border are now in uefi_ui::bedrock_controls)
 
 // ─── editor screenshots ───────────────────────────────────────────────────────
@@ -1205,6 +1494,7 @@ fn main() {
     render_graph(&p("graph"), &theme, &bevel);
     render_file_picker(&p("file_picker"), &theme, &bevel);
     render_tree_view(&p("tree_view"), &theme, &bevel);
+    render_keyboard_layout_picker(&p("keyboard_layout"), &theme, &bevel);
 
     // Editor screenshots (require Tinos font)
     match std::fs::read(TINOS_PATH) {

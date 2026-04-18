@@ -1559,6 +1559,270 @@ fn dashed_hline<D: DrawTarget<Color = Rgb888>>(
     Ok(())
 }
 
+// ── Keyboard Layout Picker layout + draw ──────────────────────────────
+
+/// Standard width of a vertical scrollbar in the keyboard layout picker.
+pub const KBD_SB_W: u32 = 26;
+#[cfg(feature = "uefi")]
+/// Height of the title bar in the keyboard layout picker dialog.
+pub const KBD_TITLE_H: u32 = 26;
+#[cfg(feature = "uefi")]
+/// Height of the OK / Cancel button row + padding.
+pub const KBD_BUTTON_ROW_H: u32 = 38;
+#[cfg(feature = "uefi")]
+/// Width of OK / Cancel buttons.
+pub const KBD_BTN_W: u32 = 80;
+
+#[cfg(feature = "uefi")]
+/// Computed geometry for the keyboard layout picker dialog.
+///
+/// Build with [`compute_keyboard_layout_picker_layout`]; pass to [`draw_keyboard_layout_picker`].
+#[derive(Debug, Clone, Copy)]
+pub struct KeyboardLayoutPickerLayout {
+    pub dialog: Rectangle,
+    pub title_bar: Rectangle,
+    pub close_btn: Rectangle,
+    pub list_outer: Rectangle,
+    pub list_inner: Rectangle,
+    pub sb_rect: Rectangle,
+    pub ok_btn: Rectangle,
+    pub cancel_btn: Rectangle,
+    /// Number of rows visible in the layout list (`list_inner.height / line_h`).
+    pub visible_rows: usize,
+}
+
+#[cfg(feature = "uefi")]
+/// Derive all sub-rectangles from a dialog outer rect and `line_h`.
+///
+/// `sb_w` — scrollbar width (use [`KBD_SB_W`] = 26 for Bedrock style).
+pub fn compute_keyboard_layout_picker_layout(
+    dialog: Rectangle,
+    line_h: i32,
+    sb_w: u32,
+) -> KeyboardLayoutPickerLayout {
+    let x = dialog.top_left.x;
+    let y = dialog.top_left.y;
+    let dw = dialog.size.width;
+    let dh = dialog.size.height;
+    let bevel_px = BedrockBevel::BEVEL_PX as i32; // 3
+    let inner_pad = bevel_px + 5; // 8px inner margin
+
+    let title_bar = Rectangle::new(Point::new(x, y), Size::new(dw, KBD_TITLE_H));
+    // Close button: 22x20, 3px from right, vertically centered in title bar
+    let cb_w = 22i32;
+    let cb_h = 20i32;
+    let close_btn = Rectangle::new(
+        Point::new(x + dw as i32 - 3 - cb_w, y + (KBD_TITLE_H as i32 - cb_h) / 2),
+        Size::new(cb_w as u32, cb_h as u32),
+    );
+
+    // List area: between title bar and button row
+    let list_top = y + KBD_TITLE_H as i32 + inner_pad;
+    // Button Y position: bottom of dialog with margin for button height
+    let btn_y = y + dh as i32 - KBD_BUTTON_ROW_H as i32 + (KBD_BUTTON_ROW_H as i32 - 22) / 2;
+    // List extends to just above the button area (no gap between list and buttons)
+    let list_h = (btn_y - list_top).max(0) as u32;
+    let list_outer = Rectangle::new(
+        Point::new(x + inner_pad, list_top),
+        Size::new(dw - inner_pad as u32 * 2, list_h),
+    );
+    let list_inner = crate::layout::pad(list_outer, BedrockBevel::BEVEL_PX);
+    let sb_rect = Rectangle::new(
+        Point::new(
+            list_outer.top_left.x + list_outer.size.width as i32 - sb_w as i32,
+            list_outer.top_left.y,
+        ),
+        Size::new(sb_w, list_h),
+    );
+
+    // Button row (bottom) - match file picker: right-aligned, OK then Cancel
+    let cancel_btn = Rectangle::new(
+        Point::new(x + dw as i32 - inner_pad - KBD_BTN_W as i32, btn_y),
+        Size::new(KBD_BTN_W, 22),
+    );
+    let ok_btn = Rectangle::new(
+        Point::new(cancel_btn.top_left.x - KBD_BTN_W as i32 - 8, btn_y),
+        Size::new(KBD_BTN_W, 22),
+    );
+
+    let visible_rows = (list_h as i32 / line_h.max(1)) as usize;
+
+    KeyboardLayoutPickerLayout {
+        dialog,
+        title_bar,
+        close_btn,
+        list_outer,
+        list_inner,
+        sb_rect,
+        ok_btn,
+        cancel_btn,
+        visible_rows,
+    }
+}
+
+#[cfg(feature = "uefi")]
+/// Draw the keyboard layout picker dialog.
+///
+/// - `target` — framebuffer to draw to
+/// - `bevel` — Bedrock bevel style
+/// - `layout` — pre-computed geometry from `compute_keyboard_layout_picker_layout`
+/// - `state` — picker state with layouts and selection
+/// - `scroll` — scrollbar state
+/// - `colors` — Bedrock theme colors
+/// - `font` — mono font for text
+/// - `line_h` — line height in pixels
+pub fn draw_keyboard_layout_picker<D: DrawTarget<Color = Rgb888>>(
+    target: &mut D,
+    bevel: &BedrockBevel,
+    layout: &KeyboardLayoutPickerLayout,
+    state: &crate::keyboard_layout::KeyboardLayoutPickerState,
+    scroll: &crate::widgets::ScrollbarState,
+    colors: &crate::theme::ThemeColors,
+    font: &MonoFont<'_>,
+    line_h: i32,
+) -> Result<(), D::Error> {
+    use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
+    use embedded_graphics::text::{Baseline, Text};
+
+    // Dialog chrome
+    bevel.draw_raised_soft(target, layout.dialog)?;
+
+    // Title bar
+    Rectangle::new(layout.title_bar.top_left, layout.title_bar.size)
+        .into_styled(PrimitiveStyle::with_fill(colors.accent))
+        .draw(target)?;
+    Text::with_baseline(
+        "Keyboard Layout",
+        Point::new(layout.title_bar.top_left.x + 8, layout.title_bar.top_left.y + 7),
+        MonoTextStyle::new(font, colors.caption_on_accent),
+        Baseline::Top,
+    ).draw(target)?;
+
+    // Close button (X)
+    draw_title_button(target, bevel, layout.close_btn, false)?;
+    {
+        let cx = layout.close_btn.top_left.x + layout.close_btn.size.width as i32 / 2;
+        let cy = layout.close_btn.top_left.y + layout.close_btn.size.height as i32 / 2;
+        let ink = Rgb888::new(0x0a, 0x0a, 0x0a);
+        Line::new(Point::new(cx - 3, cy - 3), Point::new(cx + 3, cy + 3))
+            .into_styled(PrimitiveStyle::with_stroke(ink, 2)).draw(target)?;
+        Line::new(Point::new(cx + 3, cy - 3), Point::new(cx - 3, cy + 3))
+            .into_styled(PrimitiveStyle::with_stroke(ink, 2)).draw(target)?;
+    }
+
+    // Layout list - draw with focus border if focused
+    if state.list_focused() {
+        // Draw list with selection focus indication (dashed border)
+        Rectangle::new(layout.list_outer.top_left, layout.list_outer.size)
+            .into_styled(PrimitiveStyle::with_stroke(colors.text, 1))
+            .draw(target)?;
+        draw_sunken_field(target, bevel, layout.list_outer, colors.canvas)?;
+    } else {
+        draw_sunken_field(target, bevel, layout.list_outer, colors.canvas)?;
+    }
+
+    // Draw list items
+    let font_h = font.character_size.height as i32;
+    if state.layouts.is_empty() {
+        // Display "No keyboard layouts found" message centered in list area
+        let msg = "No keyboard layouts found";
+        let msg_w = msg.len() as i32 * font.character_size.width as i32;
+        let msg_x = layout.list_inner.top_left.x + (layout.list_inner.size.width as i32 - msg_w) / 2;
+        let msg_y = layout.list_inner.top_left.y + (layout.list_inner.size.height as i32 - font_h) / 2;
+        Text::with_baseline(
+            msg,
+            Point::new(msg_x, msg_y),
+            MonoTextStyle::new(font, colors.text_disabled),
+            Baseline::Top,
+        ).draw(target)?;
+    } else {
+        for (row_offset, kbd_layout) in state.layouts.iter().skip(state.scroll_top).take(layout.visible_rows).enumerate() {
+            let row_y = layout.list_inner.top_left.y + row_offset as i32 * line_h;
+            let row_idx = state.scroll_top + row_offset;
+            let sel = row_idx == state.selected;
+            let bg = if sel { colors.selection_bg } else { colors.canvas };
+            let fg = if sel { colors.caption_on_accent } else { colors.text };
+
+            // Row background
+            Rectangle::new(
+                Point::new(layout.list_inner.top_left.x, row_y),
+                Size::new(layout.list_inner.size.width, line_h as u32),
+            ).into_styled(PrimitiveStyle::with_fill(bg)).draw(target)?;
+
+            // Layout descriptor text
+            let text_y = row_y + (line_h - font_h) / 2;
+            Text::with_baseline(
+                &kbd_layout.descriptor,
+                Point::new(layout.list_inner.top_left.x + 4, text_y),
+                MonoTextStyle::new(font, fg),
+                Baseline::Top,
+            ).draw(target)?;
+        }
+    }
+
+    // Scrollbar
+    draw_scrollbar_vertical(
+        target, bevel, layout.sb_rect,
+        scroll.thumb_center_ratio(), scroll.thumb_length_ratio(),
+        false, false,
+    )?;
+
+    // OK button - draw sunken if focused
+    if state.ok_focused() {
+        bevel.draw_sunken(target, layout.ok_btn)?;
+        Text::with_baseline(
+            "OK",
+            Point::new(
+                layout.ok_btn.top_left.x + layout.ok_btn.size.width as i32 / 2 - 12,
+                layout.ok_btn.top_left.y + layout.ok_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.caption_on_accent),
+            Baseline::Top,
+        ).draw(target)?;
+    } else {
+        bevel.draw_raised(target, layout.ok_btn)?;
+        Text::with_baseline(
+            "OK",
+            Point::new(
+                layout.ok_btn.top_left.x + layout.ok_btn.size.width as i32 / 2 - 12,
+                layout.ok_btn.top_left.y + layout.ok_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.text),
+            Baseline::Top,
+        ).draw(target)?;
+    }
+
+    // Cancel button - draw sunken if focused
+    if state.cancel_focused() {
+        bevel.draw_sunken(target, layout.cancel_btn)?;
+        Text::with_baseline(
+            "Cancel",
+            Point::new(
+                layout.cancel_btn.top_left.x + layout.cancel_btn.size.width as i32 / 2 - 20,
+                layout.cancel_btn.top_left.y + layout.cancel_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.caption_on_accent),
+            Baseline::Top,
+        ).draw(target)?;
+    } else {
+        bevel.draw_raised(target, layout.cancel_btn)?;
+        Text::with_baseline(
+            "Cancel",
+            Point::new(
+                layout.cancel_btn.top_left.x + layout.cancel_btn.size.width as i32 / 2 - 20,
+                layout.cancel_btn.top_left.y + layout.cancel_btn.size.height as i32 / 2 - font_h / 2,
+            ),
+            MonoTextStyle::new(font, colors.text),
+            Baseline::Top,
+        ).draw(target)?;
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
