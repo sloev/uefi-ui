@@ -14,8 +14,9 @@ Bedrock-style visual system (3D bevels, teal desktop, navy title bars).
   Runs on bare UEFI with no operating system underneath. 105 unit tests, runs on host with `cargo test`.
 - **`lotus-os`** -- bootable UEFI text editor. Boots directly to a full-screen editor.
   Opens the last edited file automatically on boot. File and Edit menus with copy, paste,
-  select all, and find. File picker rooted to user-accessible USB/removable volumes (EFI partitions hidden).
-  Settings (last file, last directory) persisted in UEFI NVRAM between boots.
+  select all, and find. Settings menu with keyboard layout selection (auto-loaded on boot, persisted in NVRAM).
+  File picker rooted to user-accessible USB/removable volumes (EFI partitions hidden).
+  Settings (last file, last directory, keyboard layout) persisted in UEFI NVRAM between boots.
   Build with `make build-lotus`; bootable ISO with `make iso-lotus`.
 - **`uefi_ui_test`** (`crates/uefi_ui_demo/`) -- end-to-end test app exercising all widgets
   under UEFI / QEMU. Used by `make qemu`.
@@ -112,6 +113,7 @@ make iso          # bootable ISO at target/uefi_ui_demo.iso
 ![scrollbar](screenshots/scrollbar.png)
 ![tree view](screenshots/tree_view.png)
 ![file picker](screenshots/file_picker.png)
+![keyboard layout picker](screenshots/keyboard_layout.png)
 
 ### Editor
 

@@ -39,6 +39,8 @@ pub mod focus;
 pub mod font;
 pub mod framebuffer;
 pub mod input;
+#[cfg(feature = "uefi")]
+pub mod keyboard_layout;
 pub mod layout;
 pub mod menu;
 pub mod png;
